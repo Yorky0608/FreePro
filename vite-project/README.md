@@ -52,6 +52,7 @@ npm --prefix vite-project run dev:desktop
 ```
 
 Notes:
+
 - If you close the Electron window, the command may stop (that’s expected).
 - If you want to re-open just the desktop window while Vite is running, use:
 
@@ -76,3 +77,25 @@ This outputs a production build into the `dist/` folder.
 - `src/style.css` – theme + styles
 - `electron/main.cjs` – Electron main process (desktop window)
 - `electron/preload.cjs` – safe preload bridge (minimal)
+
+## Desktop Login + Database (SQLite)
+
+When you run the desktop app (`npm run dev:desktop`), savings are stored per-user in a local SQLite database file under Electron's `userData` folder.
+
+- Create an account (email + password) or log in.
+- Savings entries are stored per month for the logged-in user.
+- In plain browser mode (`npm run dev`), the demo continues to use `localStorage`.
+
+## Python DB Schema Init (portable)
+
+There is also a Python helper script to create the same tables in a SQL database:
+
+```bash
+python scripts/init_db.py
+```
+
+It uses `DATABASE_URL` (defaults to SQLite). For other SQL engines later, point `DATABASE_URL` at your rollout database.
+
+Dependencies for that script:
+
+- `sqlalchemy`

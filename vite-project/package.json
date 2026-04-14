@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "sql.js": "^1.13.0"
+  },
   "scripts": {
     "dev": "vite",
     "dev:vite": "vite --host --port 5173 --strictPort",

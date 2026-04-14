@@ -9,6 +9,12 @@ if (!app) {
 	throw new Error('Missing #app element')
 }
 
+const desktop = /** @type {any} */ (globalThis?.desktop)
+const isDesktopApp = Boolean(desktop?.auth?.login && desktop?.savings?.getLog)
+
+/** @type {null | { id: number, email: string }} */
+let session = null
+
 app.innerHTML = `
 	<div class="shell">
 		<header class="topbar" aria-label="Site header">
@@ -46,6 +52,27 @@ app.innerHTML = `
 
 		<section class="panel" id="demo" aria-label="Savings goal demo">
 			<h2>Freedom Program Goal</h2>
+			<div class="auth" id="authWrap" aria-label="Account">
+				<div class="auth-row">
+					<div class="auth-status" id="authStatus">Not logged in</div>
+					<button class="auth-btn" id="logoutBtn" type="button" hidden>Log out</button>
+				</div>
+				<form class="auth-form" id="authForm" autocomplete="on">
+					<label class="auth-label">
+						<span>Email</span>
+						<input id="authEmail" class="auth-input" type="email" autocomplete="username" inputmode="email" />
+					</label>
+					<label class="auth-label">
+						<span>Password</span>
+						<input id="authPassword" class="auth-input" type="password" autocomplete="current-password" />
+					</label>
+					<div class="auth-actions">
+						<button class="auth-btn" id="loginBtn" type="submit">Log in</button>
+						<button class="auth-btn auth-btn--secondary" id="registerBtn" type="button">Create account</button>
+					</div>
+					<div class="auth-error" id="authError" role="status" aria-live="polite" hidden></div>
+				</form>
+			</div>
 			<div class="readout" aria-label="Savings goal readout">
 				<span class="readout-label">Savings Goal</span>
 				<output class="readout-value" id="rocketValue" for="rocketRange">$0</output>
@@ -124,12 +151,22 @@ const chartPct = /** @type {HTMLSpanElement} */ (document.querySelector('#chartP
 const chartRemaining = /** @type {HTMLSpanElement} */ (document.querySelector('#chartRemaining'))
 const chartTooltip = /** @type {HTMLDivElement} */ (document.querySelector('#chartTooltip'))
 
+const authWrap = /** @type {HTMLDivElement} */ (document.querySelector('#authWrap'))
+const authStatus = /** @type {HTMLDivElement} */ (document.querySelector('#authStatus'))
+const authForm = /** @type {HTMLFormElement} */ (document.querySelector('#authForm'))
+const authEmail = /** @type {HTMLInputElement} */ (document.querySelector('#authEmail'))
+const authPassword = /** @type {HTMLInputElement} */ (document.querySelector('#authPassword'))
+const loginBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#loginBtn'))
+const registerBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#registerBtn'))
+const logoutBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#logoutBtn'))
+const authError = /** @type {HTMLDivElement} */ (document.querySelector('#authError'))
+
 const STORAGE_KEY = 'rocket-slider:savings-log:v2'
 const STORAGE_KEY_V1 = 'rocket-slider:savings-log:v1'
 const PROGRAM_YEARS = 4
 
 /** @type {Array<{ month: number, dollars: number }>} */
-let savingsLog = loadSavingsLog()
+let savingsLog = isDesktopApp ? [] : loadSavingsLogFromLocalStorage()
 
 /** @type {null | {
 	canvasW: number,
@@ -153,6 +190,17 @@ if (savingsLog.length > 0) {
 	const latest = savingsLog[savingsLog.length - 1]
 	currentSavingsInput.value = String(latest.dollars)
 	lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
+}
+
+if (authWrap) {
+	authWrap.hidden = !isDesktopApp
+}
+
+setSavingsEnabled(!isDesktopApp)
+
+if (isDesktopApp) {
+	updateAuthUi()
+	void refreshSessionAndLoad()
 }
 
 function formatDollarsFromUnits(units) {
@@ -199,7 +247,7 @@ function formatMonthLabel(monthMs) {
 	return `${m}/${yy}`
 }
 
-function loadSavingsLog() {
+function loadSavingsLogFromLocalStorage() {
 	try {
 		// Load v2 first, else attempt migration from v1.
 		let raw = localStorage.getItem(STORAGE_KEY)
@@ -242,10 +290,97 @@ function loadSavingsLog() {
 }
 
 function saveSavingsLog() {
+	if (isDesktopApp) return
 	try {
 		localStorage.setItem(STORAGE_KEY, JSON.stringify(savingsLog))
 	} catch {
 		// ignore (private mode / storage disabled)
+	}
+}
+
+function showAuthError(message) {
+	if (!authError) return
+	authError.textContent = message
+	authError.hidden = !message
+}
+
+function updateAuthUi() {
+	if (!isDesktopApp) return
+	if (!authStatus || !logoutBtn || !authForm) return
+
+	if (session) {
+		authStatus.textContent = `Logged in as ${session.email}`
+		logoutBtn.hidden = false
+		authForm.classList.add('auth-form--hidden')
+		setSavingsEnabled(true)
+		showAuthError('')
+	} else {
+		authStatus.textContent = 'Not logged in'
+		logoutBtn.hidden = true
+		authForm.classList.remove('auth-form--hidden')
+		setSavingsEnabled(false)
+		showAuthError('')
+	}
+}
+
+function setSavingsEnabled(enabled) {
+	if (!currentSavingsInput) return
+	currentSavingsInput.disabled = !enabled
+	currentSavingsInput.classList.toggle('progress-input--disabled', !enabled)
+	if (!enabled) {
+		lastSaved.textContent = isDesktopApp ? 'Log in to save' : 'Not saved yet'
+	}
+}
+
+async function refreshSessionAndLoad() {
+	try {
+		session = await desktop.auth.getSession()
+	} catch {
+		session = null
+	}
+	updateAuthUi()
+	if (session) await loadSavingsFromDbOrMigrate()
+}
+
+async function loadSavingsFromDbOrMigrate() {
+	if (!session) return
+
+	let log = []
+	try {
+		log = await desktop.savings.getLog()
+	} catch {
+		log = []
+	}
+
+	if (Array.isArray(log) && log.length > 0) {
+		savingsLog = log
+	} else {
+		// New/empty accounts start clean (no browser localStorage migration).
+		savingsLog = []
+	}
+
+	if (savingsLog.length > 0) {
+		const latest = savingsLog[savingsLog.length - 1]
+		currentSavingsInput.value = String(latest.dollars)
+		lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
+	} else {
+		currentSavingsInput.value = '0'
+		lastSaved.textContent = 'Not saved yet'
+	}
+	updateProgress()
+}
+
+async function persistSavingsForMonth(monthMs, dollars) {
+	upsertSavingsForMonth(monthMs, dollars)
+	if (!isDesktopApp) {
+		saveSavingsLog()
+		return
+	}
+	if (!session) return
+	try {
+		await desktop.savings.upsertMonth(startOfLocalMonthMs(new Date(monthMs)), Math.max(0, Math.round(dollars)))
+	} catch {
+		// ignore
 	}
 }
 
@@ -561,8 +696,7 @@ currentSavingsInput.addEventListener('input', () => {
 	logTimer = window.setTimeout(() => {
 		const thisMonth = startOfLocalMonthMs(new Date())
 		const dollars = parseMoneyInput(currentSavingsInput.value)
-		upsertSavingsForMonth(thisMonth, dollars)
-		saveSavingsLog()
+		void persistSavingsForMonth(thisMonth, dollars)
 		lastSaved.textContent = `Last saved: ${formatMonthLabel(thisMonth)}`
 		drawSavingsChart()
 	}, 600)
@@ -575,11 +709,65 @@ currentSavingsInput.addEventListener('keydown', (e) => {
 currentSavingsInput.addEventListener('change', () => {
 	const thisMonth = startOfLocalMonthMs(new Date())
 	const dollars = parseMoneyInput(currentSavingsInput.value)
-	upsertSavingsForMonth(thisMonth, dollars)
-	saveSavingsLog()
+	void persistSavingsForMonth(thisMonth, dollars)
 	lastSaved.textContent = `Last saved: ${formatMonthLabel(thisMonth)}`
 	updateProgress()
 })
+
+if (isDesktopApp) {
+	authForm?.addEventListener('submit', async (e) => {
+		e.preventDefault()
+		showAuthError('')
+		try {
+			loginBtn.disabled = true
+			const email = authEmail.value
+			const password = authPassword.value
+			session = await desktop.auth.login(email, password)
+			authPassword.value = ''
+			updateAuthUi()
+			await loadSavingsFromDbOrMigrate()
+		} catch (err) {
+			showAuthError(err?.message ? String(err.message) : 'Login failed')
+		} finally {
+			loginBtn.disabled = false
+		}
+	})
+
+	registerBtn?.addEventListener('click', async () => {
+		showAuthError('')
+		try {
+			registerBtn.disabled = true
+			const email = authEmail.value
+			const password = authPassword.value
+			session = await desktop.auth.register(email, password)
+			authPassword.value = ''
+			updateAuthUi()
+			await loadSavingsFromDbOrMigrate()
+		} catch (err) {
+			showAuthError(err?.message ? String(err.message) : 'Registration failed')
+		} finally {
+			registerBtn.disabled = false
+		}
+	})
+
+	logoutBtn?.addEventListener('click', async () => {
+		showAuthError('')
+		try {
+			logoutBtn.disabled = true
+			await desktop.auth.logout()
+			session = null
+			savingsLog = []
+			currentSavingsInput.value = '0'
+			lastSaved.textContent = 'Log in to save'
+			updateAuthUi()
+			updateProgress()
+		} catch {
+			// ignore
+		} finally {
+			logoutBtn.disabled = false
+		}
+	})
+}
 
 window.addEventListener('resize', () => {
 	layoutRocket()
