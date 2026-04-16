@@ -53,6 +53,14 @@ function migrate() {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);
 
+		CREATE TABLE IF NOT EXISTS user_profile (
+			user_id INTEGER PRIMARY KEY,
+			goal_dollars INTEGER NOT NULL DEFAULT 0,
+			created_at_ms INTEGER NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_savings_user_month ON savings(user_id, month_ms);
 	`)
 }
@@ -163,11 +171,102 @@ function upsertSavingsMonth({ userId, monthMs, dollars }) {
 	return true
 }
 
+function getSavingsMonthMeta({ userId, monthMs }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (!Number.isFinite(monthMs) || monthMs <= 0) throw new Error('Invalid month')
+	const row = getOne(
+		'SELECT dollars, created_at_ms, updated_at_ms FROM savings WHERE user_id = ? AND month_ms = ?',
+		[userId, Math.round(monthMs)]
+	)
+	if (!row) return null
+	return {
+		dollars: Number(row.dollars),
+		createdAtMs: Number(row.created_at_ms),
+		updatedAtMs: Number(row.updated_at_ms),
+	}
+}
+
+function upsertSavingsMonthFromCloud({ userId, monthMs, dollars, createdAtMs, updatedAtMs }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (!Number.isFinite(monthMs) || monthMs <= 0) throw new Error('Invalid month')
+	if (!Number.isFinite(dollars) || dollars < 0) throw new Error('Invalid dollars')
+	if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) throw new Error('Invalid updatedAtMs')
+	const safeCreated = Number.isFinite(createdAtMs) && createdAtMs > 0 ? createdAtMs : updatedAtMs
+
+	run(
+		`INSERT INTO savings (user_id, month_ms, dollars, created_at_ms, updated_at_ms)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(user_id, month_ms)
+		 DO UPDATE SET dollars = excluded.dollars, updated_at_ms = excluded.updated_at_ms`,
+		[
+			userId,
+			Math.round(monthMs),
+			Math.round(dollars),
+			Math.round(safeCreated),
+			Math.round(updatedAtMs),
+		]
+	)
+	persist()
+	return true
+}
+
+function getUserGoalMeta(userId) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	const row = getOne(
+		'SELECT goal_dollars, created_at_ms, updated_at_ms FROM user_profile WHERE user_id = ?',
+		[userId]
+	)
+	if (!row) return null
+	return {
+		goalDollars: Number(row.goal_dollars),
+		createdAtMs: Number(row.created_at_ms),
+		updatedAtMs: Number(row.updated_at_ms),
+	}
+}
+
+function upsertUserGoal({ userId, goalDollars }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (!Number.isFinite(goalDollars) || goalDollars < 0) throw new Error('Invalid goal')
+
+	const now = Date.now()
+	run(
+		`INSERT INTO user_profile (user_id, goal_dollars, created_at_ms, updated_at_ms)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id)
+		 DO UPDATE SET goal_dollars = excluded.goal_dollars, updated_at_ms = excluded.updated_at_ms`,
+		[userId, Math.round(goalDollars), now, now]
+	)
+	persist()
+	return true
+}
+
+function upsertUserGoalFromCloud({ userId, goalDollars, createdAtMs, updatedAtMs }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (!Number.isFinite(goalDollars) || goalDollars < 0) throw new Error('Invalid goal')
+	if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) throw new Error('Invalid updatedAtMs')
+	const safeCreated = Number.isFinite(createdAtMs) && createdAtMs > 0 ? createdAtMs : updatedAtMs
+
+	run(
+		`INSERT INTO user_profile (user_id, goal_dollars, created_at_ms, updated_at_ms)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id)
+		 DO UPDATE SET goal_dollars = excluded.goal_dollars, updated_at_ms = excluded.updated_at_ms`,
+		[userId, Math.round(goalDollars), Math.round(safeCreated), Math.round(updatedAtMs)]
+	)
+	persist()
+	return true
+}
+
 module.exports = {
 	initDb,
 	createUser,
 	getUserByEmail,
 	listSavingsLog,
 	upsertSavingsMonth,
+	getSavingsMonthMeta,
+	upsertSavingsMonthFromCloud,
+	getUserGoalMeta,
+	upsertUserGoal,
+	upsertUserGoalFromCloud,
 	normalizeEmail,
 }

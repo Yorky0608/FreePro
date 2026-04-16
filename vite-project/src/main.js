@@ -163,6 +163,7 @@ const authError = /** @type {HTMLDivElement} */ (document.querySelector('#authEr
 
 const STORAGE_KEY = 'rocket-slider:savings-log:v2'
 const STORAGE_KEY_V1 = 'rocket-slider:savings-log:v1'
+const GOAL_STORAGE_KEY = 'rocket-slider:goal-dollars:v1'
 const PROGRAM_YEARS = 4
 
 /** @type {Array<{ month: number, dollars: number }>} */
@@ -197,6 +198,17 @@ if (authWrap) {
 }
 
 setSavingsEnabled(!isDesktopApp)
+
+// Apply any locally saved goal immediately (web demo, or pre-login in desktop).
+try {
+	const savedGoalDollars = loadGoalDollarsFromLocalStorage()
+	if (savedGoalDollars > 0) {
+		const units = clamp(Math.round(savedGoalDollars / DOLLARS_PER_UNIT), MIN, MAX)
+		range.value = String(units)
+	}
+} catch {
+	// ignore
+}
 
 if (isDesktopApp) {
 	updateAuthUi()
@@ -298,6 +310,26 @@ function saveSavingsLog() {
 	}
 }
 
+function loadGoalDollarsFromLocalStorage() {
+	try {
+		const raw = localStorage.getItem(GOAL_STORAGE_KEY)
+		if (!raw) return 0
+		const n = Number(raw)
+		if (!Number.isFinite(n)) return 0
+		return Math.max(0, Math.round(n))
+	} catch {
+		return 0
+	}
+}
+
+function saveGoalDollarsToLocalStorage(goalDollars) {
+	try {
+		localStorage.setItem(GOAL_STORAGE_KEY, String(Math.max(0, Math.round(goalDollars))))
+	} catch {
+		// ignore
+	}
+}
+
 function showAuthError(message) {
 	if (!authError) return
 	authError.textContent = message
@@ -339,7 +371,10 @@ async function refreshSessionAndLoad() {
 		session = null
 	}
 	updateAuthUi()
-	if (session) await loadSavingsFromDbOrMigrate()
+	if (session) {
+		await loadSavingsFromDbOrMigrate()
+		await loadGoalFromDbOrMigrate()
+	}
 }
 
 async function loadSavingsFromDbOrMigrate() {
@@ -368,6 +403,62 @@ async function loadSavingsFromDbOrMigrate() {
 		lastSaved.textContent = 'Not saved yet'
 	}
 	updateProgress()
+}
+
+let suppressGoalPersist = false
+let goalTimer = null
+
+function setGoalUnits(units) {
+	suppressGoalPersist = true
+	range.value = String(clamp(Math.round(units), MIN, MAX))
+	onInput()
+	suppressGoalPersist = false
+}
+
+async function loadGoalFromDbOrMigrate() {
+	if (!session) return
+	if (!desktop?.profile?.getGoal) return
+
+	let goalDollars = 0
+	try {
+		const out = await desktop.profile.getGoal()
+		goalDollars = Number(out?.goalDollars)
+	} catch {
+		goalDollars = 0
+	}
+
+	if (!Number.isFinite(goalDollars) || goalDollars < 0) goalDollars = 0
+
+	// If the account has no saved goal yet, seed it from localStorage (if present).
+	if (goalDollars <= 0) {
+		const localGoal = loadGoalDollarsFromLocalStorage()
+		if (localGoal > 0) {
+			goalDollars = localGoal
+			try {
+				await desktop.profile.setGoal(goalDollars)
+			} catch {
+				// ignore
+			}
+		}
+	}
+
+	setGoalUnits(goalDollars / DOLLARS_PER_UNIT)
+	saveGoalDollarsToLocalStorage(goalDollars)
+}
+
+async function persistGoalDollars(goalDollars) {
+	const safe = Math.max(0, Math.round(goalDollars))
+	saveGoalDollarsToLocalStorage(safe)
+
+	if (!isDesktopApp) return
+	if (!session) return
+	if (!desktop?.profile?.setGoal) return
+
+	try {
+		await desktop.profile.setGoal(safe)
+	} catch {
+		// ignore
+	}
 }
 
 async function persistSavingsForMonth(monthMs, dollars) {
@@ -685,6 +776,14 @@ function onInput() {
 	range.style.setProperty('--range-pct', `${percent * 100}%`)
 	layoutRocket()
 	updateProgress()
+
+	if (!suppressGoalPersist) {
+		const goalDollars = value * DOLLARS_PER_UNIT
+		if (goalTimer) window.clearTimeout(goalTimer)
+		goalTimer = window.setTimeout(() => {
+			void persistGoalDollars(goalDollars)
+		}, 400)
+	}
 }
 
 range.addEventListener('input', onInput)
@@ -726,6 +825,7 @@ if (isDesktopApp) {
 			authPassword.value = ''
 			updateAuthUi()
 			await loadSavingsFromDbOrMigrate()
+			await loadGoalFromDbOrMigrate()
 		} catch (err) {
 			showAuthError(err?.message ? String(err.message) : 'Login failed')
 		} finally {
@@ -743,6 +843,7 @@ if (isDesktopApp) {
 			authPassword.value = ''
 			updateAuthUi()
 			await loadSavingsFromDbOrMigrate()
+			await loadGoalFromDbOrMigrate()
 		} catch (err) {
 			showAuthError(err?.message ? String(err.message) : 'Registration failed')
 		} finally {

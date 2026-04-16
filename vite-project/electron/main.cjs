@@ -6,7 +6,19 @@ const db = require('./db.cjs')
 
 const isDev = !app.isPackaged
 
-/** @type {Map<number, { id: number, email: string }>} */
+const API_BASE_URL = process.env.FREEDOM_API_BASE_URL || 'https://1wos40ydh1.execute-api.us-east-2.amazonaws.com'
+const SYNC_DEBUG = String(process.env.FREEDOM_SYNC_DEBUG || '').toLowerCase() === '1' || String(process.env.FREEDOM_SYNC_DEBUG || '').toLowerCase() === 'true'
+
+function logSyncDebug(...args) {
+  if (!SYNC_DEBUG) return
+  try {
+    console.log('[sync]', ...args)
+  } catch {
+    // ignore
+  }
+}
+
+/** @type {Map<number, { id: number, email: string, cloudToken?: string, cloudUserId?: string, cloudPulled?: boolean, lastCloudPullMs?: number, cloudGoalPulled?: boolean, lastCloudGoalPullMs?: number }>} */
 const sessionByWebContentsId = new Map()
 
 function getSessionFromEvent(event) {
@@ -25,9 +37,155 @@ function requireSession(event) {
   return session
 }
 
+async function apiJson({ method, apiPath, token, body, query }) {
+  if (typeof fetch !== 'function') throw new Error('fetch is not available in this runtime')
+
+  const url = new URL(apiPath, API_BASE_URL)
+  if (query && typeof query === 'object') {
+    for (const [k, v] of Object.entries(query)) {
+      if (v === undefined || v === null) continue
+      url.searchParams.set(k, String(v))
+    }
+  }
+
+  /** @type {Record<string, string>} */
+  const headers = {
+    'content-type': 'application/json',
+    'accept': 'application/json',
+  }
+  if (token) headers.authorization = `Bearer ${token}`
+
+  logSyncDebug('request', method, url.pathname)
+
+  const res = await fetch(url, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : undefined,
+  })
+
+  const text = await res.text()
+  let data = null
+  if (text) {
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = null
+    }
+  }
+
+  if (!res.ok) {
+    const msg = typeof data?.error === 'string' ? data.error : `Request failed (${res.status})`
+    logSyncDebug('response', res.status, method, url.pathname, msg)
+    const err = new Error(msg)
+    err.status = res.status
+    throw err
+  }
+
+  logSyncDebug('response', res.status, method, url.pathname)
+  return data
+}
+
+async function cloudRegister(email, password) {
+  return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password } })
+}
+
+async function cloudLogin(email, password) {
+  return apiJson({ method: 'POST', apiPath: '/auth/login', body: { email, password } })
+}
+
+async function cloudSaveMonth({ token, monthMs, dollars }) {
+  return apiJson({ method: 'POST', apiPath: '/sync/save', token, body: { monthMs, dollars } })
+}
+
+async function cloudPull({ token, sinceMs }) {
+  return apiJson({ method: 'GET', apiPath: '/sync/pull', token, query: { sinceMs } })
+}
+
+async function cloudGetGoal({ token }) {
+  return apiJson({ method: 'GET', apiPath: '/profile/goal', token })
+}
+
+async function cloudSetGoal({ token, goalDollars }) {
+  return apiJson({ method: 'POST', apiPath: '/profile/goal', token, body: { goalDollars } })
+}
+
+function ensureLocalUser({ email, password }) {
+  const existing = db.getUserByEmail(email)
+  if (existing) return existing
+
+  const passwordHash = bcrypt.hashSync(password, 10)
+  return db.createUser({ email, passwordHash })
+}
+
+async function cloudPullAndMerge({ token, localUserId, sinceMs }) {
+  const out = await cloudPull({ token, sinceMs })
+  const items = Array.isArray(out?.items) ? out.items : []
+
+  let maxSeen = Number.isFinite(sinceMs) ? sinceMs : 0
+
+  for (const item of items) {
+    const monthMs = Number(item?.monthMs)
+    const dollars = Number(item?.dollars)
+    const updatedAtMs = Number(item?.updatedAtMs)
+    const createdAtMs = Number(item?.createdAtMs)
+
+    if (!Number.isFinite(monthMs) || monthMs <= 0) continue
+    if (!Number.isFinite(dollars) || dollars < 0) continue
+    if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) continue
+
+    const local = db.getSavingsMonthMeta({ userId: localUserId, monthMs })
+    const localUpdated = local ? Number(local.updatedAtMs) : 0
+
+    if (!local || updatedAtMs > localUpdated) {
+      db.upsertSavingsMonthFromCloud({
+        userId: localUserId,
+        monthMs,
+        dollars,
+        createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : updatedAtMs,
+        updatedAtMs,
+      })
+    }
+
+    if (updatedAtMs > maxSeen) maxSeen = updatedAtMs
+  }
+
+  return maxSeen
+}
+
+async function cloudPullGoalAndMerge({ token, localUserId }) {
+  const out = await cloudGetGoal({ token })
+
+  const goalDollars = Number(out?.goalDollars)
+  const updatedAtMs = Number(out?.updatedAtMs)
+  const createdAtMs = Number(out?.createdAtMs)
+
+  if (!Number.isFinite(goalDollars) || goalDollars < 0) return 0
+
+  // If the API doesn't return timestamps, just treat it as a value.
+  if (!Number.isFinite(updatedAtMs) || updatedAtMs <= 0) {
+    db.upsertUserGoal({ userId: localUserId, goalDollars })
+    return 0
+  }
+
+  const local = db.getUserGoalMeta(localUserId)
+  const localUpdated = local ? Number(local.updatedAtMs) : 0
+
+  if (!local || updatedAtMs > localUpdated) {
+    db.upsertUserGoalFromCloud({
+      userId: localUserId,
+      goalDollars,
+      createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : updatedAtMs,
+      updatedAtMs,
+    })
+  }
+
+  return updatedAtMs
+}
+
 function setupIpc() {
   ipcMain.handle('auth:getSession', async (event) => {
-    return getSessionFromEvent(event)
+    const s = getSessionFromEvent(event)
+    return s ? { id: s.id, email: s.email } : null
   })
 
   ipcMain.handle('auth:logout', async (event) => {
@@ -45,10 +203,57 @@ function setupIpc() {
     const existing = db.getUserByEmail(email)
     if (existing) throw new Error('An account with that email already exists')
 
+    /** @type {null | { userId?: string, token?: string }} */
+    let cloud = null
+    try {
+      cloud = await cloudRegister(email, password)
+      logSyncDebug('cloud register ok')
+    } catch (err) {
+      logSyncDebug('cloud register failed', err?.status || '', err?.message || String(err))
+      // If the cloud says the account exists or the request is invalid, surface that.
+      if (err?.status === 409 || err?.status === 400) throw err
+      // Otherwise allow local-only registration (no sync) for now.
+      cloud = null
+    }
+
     const passwordHash = bcrypt.hashSync(password, 10)
     const user = db.createUser({ email, passwordHash })
+
     const wcId = event?.sender?.id
-    if (Number.isFinite(wcId)) sessionByWebContentsId.set(wcId, { id: user.id, email: user.email })
+    if (Number.isFinite(wcId)) {
+      sessionByWebContentsId.set(wcId, {
+        id: user.id,
+        email: user.email,
+        cloudToken: typeof cloud?.token === 'string' ? cloud.token : undefined,
+        cloudUserId: typeof cloud?.userId === 'string' ? cloud.userId : undefined,
+        cloudPulled: false,
+        lastCloudPullMs: 0,
+        cloudGoalPulled: false,
+        lastCloudGoalPullMs: 0,
+      })
+
+      const s = sessionByWebContentsId.get(wcId)
+      if (s?.cloudToken) {
+        try {
+          s.lastCloudPullMs = await cloudPullAndMerge({ token: s.cloudToken, localUserId: s.id, sinceMs: 0 })
+          s.cloudPulled = true
+          logSyncDebug('cloud pull ok (register)', s.lastCloudPullMs)
+        } catch (err) {
+          logSyncDebug('cloud pull failed (register)', err?.status || '', err?.message || String(err))
+          // ignore
+        }
+
+        try {
+          s.lastCloudGoalPullMs = await cloudPullGoalAndMerge({ token: s.cloudToken, localUserId: s.id })
+          s.cloudGoalPulled = true
+          logSyncDebug('cloud goal pull ok (register)', s.lastCloudGoalPullMs)
+        } catch (err) {
+          logSyncDebug('cloud goal pull failed (register)', err?.status || '', err?.message || String(err))
+          // ignore
+        }
+      }
+    }
+
     return { id: user.id, email: user.email }
   })
 
@@ -58,18 +263,88 @@ function setupIpc() {
     if (!email) throw new Error('Email is required')
     if (!password) throw new Error('Password is required')
 
-    const user = db.getUserByEmail(email)
-    if (!user) throw new Error('Invalid email or password')
-    const ok = bcrypt.compareSync(password, user.passwordHash)
-    if (!ok) throw new Error('Invalid email or password')
+    /** @type {null | { userId?: string, token?: string }} */
+    let cloud = null
+    try {
+      cloud = await cloudLogin(email, password)
+      logSyncDebug('cloud login ok')
+    } catch (err) {
+      logSyncDebug('cloud login failed', err?.status || '', err?.message || String(err))
+      // If the cloud rejects credentials, do not fall back.
+      if (err?.status === 401) throw err
+      cloud = null
+    }
+
+    // Ensure a local user exists so savings are still stored offline.
+    const localUser = ensureLocalUser({ email, password })
 
     const wcId = event?.sender?.id
-    if (Number.isFinite(wcId)) sessionByWebContentsId.set(wcId, { id: user.id, email: user.email })
-    return { id: user.id, email: user.email }
+    if (Number.isFinite(wcId)) {
+      sessionByWebContentsId.set(wcId, {
+        id: localUser.id,
+        email: localUser.email,
+        cloudToken: typeof cloud?.token === 'string' ? cloud.token : undefined,
+        cloudUserId: typeof cloud?.userId === 'string' ? cloud.userId : undefined,
+        cloudPulled: false,
+        lastCloudPullMs: 0,
+        cloudGoalPulled: false,
+        lastCloudGoalPullMs: 0,
+      })
+
+      const s = sessionByWebContentsId.get(wcId)
+      if (s?.cloudToken) {
+        try {
+          s.lastCloudPullMs = await cloudPullAndMerge({ token: s.cloudToken, localUserId: s.id, sinceMs: 0 })
+          s.cloudPulled = true
+          logSyncDebug('cloud pull ok (login)', s.lastCloudPullMs)
+        } catch (err) {
+          logSyncDebug('cloud pull failed (login)', err?.status || '', err?.message || String(err))
+          // ignore
+        }
+
+        try {
+          s.lastCloudGoalPullMs = await cloudPullGoalAndMerge({ token: s.cloudToken, localUserId: s.id })
+          s.cloudGoalPulled = true
+          logSyncDebug('cloud goal pull ok (login)', s.lastCloudGoalPullMs)
+        } catch (err) {
+          logSyncDebug('cloud goal pull failed (login)', err?.status || '', err?.message || String(err))
+          // ignore
+        }
+      }
+    }
+
+    return { id: localUser.id, email: localUser.email }
   })
 
   ipcMain.handle('savings:getLog', async (event) => {
     const session = requireSession(event)
+
+    if (session.cloudToken && !session.cloudPulled) {
+      try {
+        session.lastCloudPullMs = await cloudPullAndMerge({
+          token: session.cloudToken,
+          localUserId: session.id,
+          sinceMs: 0,
+        })
+        session.cloudPulled = true
+        logSyncDebug('cloud pull ok (getLog)', session.lastCloudPullMs)
+      } catch (err) {
+        logSyncDebug('cloud pull failed (getLog)', err?.status || '', err?.message || String(err))
+        // ignore
+      }
+    }
+
+    if (session.cloudToken && !session.cloudGoalPulled) {
+      try {
+        session.lastCloudGoalPullMs = await cloudPullGoalAndMerge({ token: session.cloudToken, localUserId: session.id })
+        session.cloudGoalPulled = true
+        logSyncDebug('cloud goal pull ok (getLog)', session.lastCloudGoalPullMs)
+      } catch (err) {
+        logSyncDebug('cloud goal pull failed (getLog)', err?.status || '', err?.message || String(err))
+        // ignore
+      }
+    }
+
     return db.listSavingsLog(session.id)
   })
 
@@ -77,7 +352,71 @@ function setupIpc() {
     const session = requireSession(event)
     const month = Number(payload?.month)
     const dollars = Number(payload?.dollars)
+
     db.upsertSavingsMonth({ userId: session.id, monthMs: month, dollars })
+
+    if (session.cloudToken) {
+      try {
+        await cloudSaveMonth({ token: session.cloudToken, monthMs: month, dollars })
+        logSyncDebug('cloud save ok', month)
+      } catch (err) {
+        logSyncDebug('cloud save failed', err?.status || '', err?.message || String(err))
+        // ignore (local save still succeeded)
+      }
+    }
+
+    return true
+  })
+
+  ipcMain.handle('profile:getGoal', async (event) => {
+    const session = requireSession(event)
+
+    if (session.cloudToken && !session.cloudGoalPulled) {
+      try {
+        session.lastCloudGoalPullMs = await cloudPullGoalAndMerge({ token: session.cloudToken, localUserId: session.id })
+        session.cloudGoalPulled = true
+        logSyncDebug('cloud goal pull ok (getGoal)', session.lastCloudGoalPullMs)
+      } catch (err) {
+        logSyncDebug('cloud goal pull failed (getGoal)', err?.status || '', err?.message || String(err))
+        // ignore
+      }
+    }
+
+    const meta = db.getUserGoalMeta(session.id)
+    return { goalDollars: meta ? meta.goalDollars : 0 }
+  })
+
+  ipcMain.handle('profile:setGoal', async (event, payload) => {
+    const session = requireSession(event)
+    const goalDollars = Number(payload?.goalDollars)
+    if (!Number.isFinite(goalDollars) || goalDollars < 0) throw new Error('Invalid goal amount')
+
+    db.upsertUserGoal({ userId: session.id, goalDollars })
+
+    if (session.cloudToken) {
+      try {
+        const out = await cloudSetGoal({ token: session.cloudToken, goalDollars })
+
+        const updatedAtMs = Number(out?.updatedAtMs)
+        const createdAtMs = Number(out?.createdAtMs)
+        const serverGoal = Number(out?.goalDollars)
+
+        if (Number.isFinite(serverGoal) && serverGoal >= 0 && Number.isFinite(updatedAtMs) && updatedAtMs > 0) {
+          db.upsertUserGoalFromCloud({
+            userId: session.id,
+            goalDollars: serverGoal,
+            createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : updatedAtMs,
+            updatedAtMs,
+          })
+        }
+
+        logSyncDebug('cloud goal save ok')
+      } catch (err) {
+        logSyncDebug('cloud goal save failed', err?.status || '', err?.message || String(err))
+        // ignore (local save still succeeded)
+      }
+    }
+
     return true
   })
 }

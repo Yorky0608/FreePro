@@ -13,4 +13,8 @@ contextBridge.exposeInMainWorld('desktop', {
     getLog: () => ipcRenderer.invoke('savings:getLog'),
     upsertMonth: (month, dollars) => ipcRenderer.invoke('savings:upsertMonth', { month, dollars }),
   },
+  profile: {
+    getGoal: () => ipcRenderer.invoke('profile:getGoal'),
+    setGoal: (goalDollars) => ipcRenderer.invoke('profile:setGoal', { goalDollars }),
+  },
 })
