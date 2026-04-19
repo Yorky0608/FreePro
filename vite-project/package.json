@@ -14,6 +14,7 @@
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "dev:desktop": "concurrently -k --success first -n VITE,ELECTRON -c auto npm:dev:vite npm:dev:electron",
     "build": "vite build",
+    "postbuild": "node scripts/copy-404.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
