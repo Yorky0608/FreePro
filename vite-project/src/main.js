@@ -12,7 +12,11 @@ if (!app) {
 const desktop = /** @type {any} */ (globalThis?.desktop)
 const isDesktopApp = Boolean(desktop?.auth?.login && desktop?.savings?.getLog)
 
-/** @type {null | { id: number, email: string }} */
+const DEFAULT_API_BASE_URL = 'https://1wos40ydh1.execute-api.us-east-2.amazonaws.com'
+const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (import.meta.env.DEV ? '/api' : DEFAULT_API_BASE_URL)
+const WEB_SESSION_KEY = 'freedom-program:web-session:v1'
+
+/** @type {null | { id: number, email: string, token?: string, cloudUserId?: string }} */
 let session = null
 
 app.innerHTML = `
@@ -194,10 +198,10 @@ if (savingsLog.length > 0) {
 }
 
 if (authWrap) {
-	authWrap.hidden = !isDesktopApp
+	authWrap.hidden = false
 }
 
-setSavingsEnabled(!isDesktopApp)
+setSavingsEnabled(!isDesktopApp ? true : Boolean(session))
 
 // Apply any locally saved goal immediately (web demo, or pre-login in desktop).
 try {
@@ -210,9 +214,125 @@ try {
 	// ignore
 }
 
-if (isDesktopApp) {
-	updateAuthUi()
-	void refreshSessionAndLoad()
+updateAuthUi()
+void refreshSessionAndLoad()
+
+function loadWebSessionFromStorage() {
+	try {
+		const raw = localStorage.getItem(WEB_SESSION_KEY)
+		if (!raw) return null
+		const data = JSON.parse(raw)
+		const email = typeof data?.email === 'string' ? data.email : ''
+		const token = typeof data?.token === 'string' ? data.token : ''
+		const cloudUserId = typeof data?.cloudUserId === 'string' ? data.cloudUserId : ''
+		if (!email || !token) return null
+		return { id: 0, email, token, cloudUserId: cloudUserId || undefined }
+	} catch {
+		return null
+	}
+}
+
+function saveWebSessionToStorage(nextSession) {
+	try {
+		if (!nextSession?.token) {
+			localStorage.removeItem(WEB_SESSION_KEY)
+			return
+		}
+		localStorage.setItem(
+			WEB_SESSION_KEY,
+			JSON.stringify({
+				email: nextSession.email,
+				token: nextSession.token,
+				cloudUserId: nextSession.cloudUserId,
+			})
+		)
+	} catch {
+		// ignore
+	}
+}
+
+async function apiJson({ method, apiPath, token, body, query, contentType }) {
+	const base = API_BASE_URL
+	const url = base.startsWith('/')
+		? new URL(`${base.replace(/\/$/, '')}${apiPath}`, location.origin)
+		: new URL(apiPath, base)
+	if (query && typeof query === 'object') {
+		for (const [k, v] of Object.entries(query)) {
+			if (v === undefined || v === null) continue
+			url.searchParams.set(k, String(v))
+		}
+	}
+
+	/** @type {Record<string, string>} */
+	const headers = {
+		'content-type': (typeof contentType === 'string' && contentType) ? contentType : 'application/json',
+		'accept': 'application/json',
+	}
+	if (token) headers.authorization = `Bearer ${token}`
+
+	let res
+	try {
+		res = await fetch(url, {
+			method,
+			headers,
+			body: body ? JSON.stringify(body) : undefined,
+		})
+	} catch (err) {
+		// In browsers this is commonly thrown for CORS failures (preflight blocked),
+		// DNS issues, offline mode, or the server refusing the connection.
+		const hint =
+			`Network error calling ${url.origin}${url.pathname}. ` +
+			`If you're running in a browser (Vite/GitHub Pages), this is often a CORS issue. ` +
+			`Your API must allow Origin: ${location.origin} and handle OPTIONS preflight.`
+		const e = new Error(hint)
+		e.cause = err
+		throw e
+	}
+
+	const text = await res.text()
+	let data = null
+	if (text) {
+		try {
+			data = JSON.parse(text)
+		} catch {
+			data = null
+		}
+	}
+
+	if (!res.ok) {
+		const msg = typeof data?.error === 'string' ? data.error : `Request failed (${res.status})`
+		const err = new Error(msg)
+		err.status = res.status
+		throw err
+	}
+
+	return data
+}
+
+async function cloudRegister(email, password) {
+	// Use a "simple" Content-Type to avoid CORS preflight in browsers when the API
+	// doesn't support OPTIONS. The backend can still parse JSON from the body string.
+	return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password }, contentType: 'text/plain' })
+}
+
+async function cloudLogin(email, password) {
+	return apiJson({ method: 'POST', apiPath: '/auth/login', body: { email, password }, contentType: 'text/plain' })
+}
+
+async function cloudSaveMonth({ token, monthMs, dollars }) {
+	return apiJson({ method: 'POST', apiPath: '/sync/save', token, body: { monthMs, dollars } })
+}
+
+async function cloudPull({ token, sinceMs }) {
+	return apiJson({ method: 'GET', apiPath: '/sync/pull', token, query: { sinceMs } })
+}
+
+async function cloudGetGoal({ token }) {
+	return apiJson({ method: 'GET', apiPath: '/profile/goal', token })
+}
+
+async function cloudSetGoal({ token, goalDollars }) {
+	return apiJson({ method: 'POST', apiPath: '/profile/goal', token, body: { goalDollars } })
 }
 
 function formatDollarsFromUnits(units) {
@@ -336,8 +456,31 @@ function showAuthError(message) {
 	authError.hidden = !message
 }
 
+function resetSavingsUi({ message }) {
+	savingsLog = []
+	currentSavingsInput.value = '0'
+	lastSaved.textContent = message
+	if (!isDesktopApp) saveSavingsLog()
+	updateProgress()
+}
+
+function resetGoalUi({ persistLocal }) {
+	setGoalUnits(0)
+	if (persistLocal) saveGoalDollarsToLocalStorage(0)
+}
+
+let didWarnWebSync = false
+function warnWebSyncIfNeeded(err) {
+	if (isDesktopApp) return
+	if (didWarnWebSync) return
+	const msg = String(err?.message || '')
+	if (!msg) return
+	if (!msg.toLowerCase().includes('cors')) return
+	didWarnWebSync = true
+	showAuthError(msg)
+}
+
 function updateAuthUi() {
-	if (!isDesktopApp) return
 	if (!authStatus || !logoutBtn || !authForm) return
 
 	if (session) {
@@ -350,13 +493,19 @@ function updateAuthUi() {
 		authStatus.textContent = 'Not logged in'
 		logoutBtn.hidden = true
 		authForm.classList.remove('auth-form--hidden')
-		setSavingsEnabled(false)
+		setSavingsEnabled(!isDesktopApp)
 		showAuthError('')
 	}
 }
 
 function setSavingsEnabled(enabled) {
 	if (!currentSavingsInput) return
+	if (!isDesktopApp) {
+		// Web demo stays editable even when logged out (localStorage fallback).
+		currentSavingsInput.disabled = false
+		currentSavingsInput.classList.remove('progress-input--disabled')
+		return
+	}
 	currentSavingsInput.disabled = !enabled
 	currentSavingsInput.classList.toggle('progress-input--disabled', !enabled)
 	if (!enabled) {
@@ -365,16 +514,91 @@ function setSavingsEnabled(enabled) {
 }
 
 async function refreshSessionAndLoad() {
-	try {
-		session = await desktop.auth.getSession()
-	} catch {
-		session = null
+	if (isDesktopApp) {
+		try {
+			session = await desktop.auth.getSession()
+		} catch {
+			session = null
+		}
+	} else {
+		session = loadWebSessionFromStorage()
 	}
 	updateAuthUi()
-	if (session) {
-		await loadSavingsFromDbOrMigrate()
-		await loadGoalFromDbOrMigrate()
+	if (isDesktopApp) {
+		if (session) {
+			await loadSavingsFromDbOrMigrate()
+			await loadGoalFromDbOrMigrate()
+		}
+		return
 	}
+
+	// Web mode: always use localStorage for baseline, and if logged in also pull from cloud.
+	if (session?.token) {
+		// Clear any previous visual state before loading the account.
+		resetSavingsUi({ message: 'Not saved yet' })
+		resetGoalUi({ persistLocal: false })
+
+		await loadSavingsFromCloudOrFallback()
+		await loadGoalFromCloudOrFallback()
+	}
+	updateProgress()
+}
+
+async function loadSavingsFromCloudOrFallback() {
+	if (!session?.token) return
+	let out = null
+	try {
+		out = await cloudPull({ token: session.token, sinceMs: 0 })
+	} catch (err) {
+		warnWebSyncIfNeeded(err)
+		out = null
+	}
+
+	const items = Array.isArray(out?.items) ? out.items : []
+	/** @type {Array<{ month: number, dollars: number }>} */
+	const next = []
+	for (const item of items) {
+		const month = Number(item?.monthMs)
+		const dollars = Number(item?.dollars)
+		if (!Number.isFinite(month) || month <= 0) continue
+		if (!Number.isFinite(dollars) || dollars < 0) continue
+		next.push({ month: startOfLocalMonthMs(new Date(month)), dollars: Math.max(0, Math.round(dollars)) })
+	}
+	next.sort((a, b) => a.month - b.month)
+	savingsLog = next
+	saveSavingsLog()
+
+	if (savingsLog.length > 0) {
+		const latest = savingsLog[savingsLog.length - 1]
+		currentSavingsInput.value = String(latest.dollars)
+		lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
+	} else {
+		currentSavingsInput.value = '0'
+		lastSaved.textContent = 'Not saved yet'
+	}
+
+	updateProgress()
+}
+
+async function loadGoalFromCloudOrFallback() {
+	if (!session?.token) return
+	let goalDollars = 0
+	try {
+		const out = await cloudGetGoal({ token: session.token })
+		goalDollars = Number(out?.goalDollars)
+	} catch (err) {
+		warnWebSyncIfNeeded(err)
+		goalDollars = 0
+	}
+	if (!Number.isFinite(goalDollars) || goalDollars < 0) goalDollars = 0
+	if (goalDollars > 0) {
+		setGoalUnits(goalDollars / DOLLARS_PER_UNIT)
+		saveGoalDollarsToLocalStorage(goalDollars)
+		return
+	}
+
+	// No cloud goal saved yet; reset to zero so we don't keep a previous user's slider.
+	resetGoalUi({ persistLocal: true })
 }
 
 async function loadSavingsFromDbOrMigrate() {
@@ -450,27 +674,44 @@ async function persistGoalDollars(goalDollars) {
 	const safe = Math.max(0, Math.round(goalDollars))
 	saveGoalDollarsToLocalStorage(safe)
 
-	if (!isDesktopApp) return
-	if (!session) return
-	if (!desktop?.profile?.setGoal) return
+	if (isDesktopApp) {
+		if (!session) return
+		if (!desktop?.profile?.setGoal) return
+		try {
+			await desktop.profile.setGoal(safe)
+		} catch {
+			// ignore
+		}
+		return
+	}
 
+	if (!session?.token) return
 	try {
-		await desktop.profile.setGoal(safe)
-	} catch {
+		await cloudSetGoal({ token: session.token, goalDollars: safe })
+	} catch (err) {
+		warnWebSyncIfNeeded(err)
 		// ignore
 	}
 }
 
 async function persistSavingsForMonth(monthMs, dollars) {
 	upsertSavingsForMonth(monthMs, dollars)
-	if (!isDesktopApp) {
-		saveSavingsLog()
+	if (isDesktopApp) {
+		if (!session) return
+		try {
+			await desktop.savings.upsertMonth(startOfLocalMonthMs(new Date(monthMs)), Math.max(0, Math.round(dollars)))
+		} catch {
+			// ignore
+		}
 		return
 	}
-	if (!session) return
+
+	saveSavingsLog()
+	if (!session?.token) return
 	try {
-		await desktop.savings.upsertMonth(startOfLocalMonthMs(new Date(monthMs)), Math.max(0, Math.round(dollars)))
-	} catch {
+		await cloudSaveMonth({ token: session.token, monthMs: startOfLocalMonthMs(new Date(monthMs)), dollars: Math.max(0, Math.round(dollars)) })
+	} catch (err) {
+		warnWebSyncIfNeeded(err)
 		// ignore
 	}
 }
@@ -813,62 +1054,105 @@ currentSavingsInput.addEventListener('change', () => {
 	updateProgress()
 })
 
-if (isDesktopApp) {
-	authForm?.addEventListener('submit', async (e) => {
-		e.preventDefault()
-		showAuthError('')
-		try {
-			loginBtn.disabled = true
-			const email = authEmail.value
-			const password = authPassword.value
+authForm?.addEventListener('submit', async (e) => {
+	e.preventDefault()
+	showAuthError('')
+	try {
+		loginBtn.disabled = true
+		const email = String(authEmail.value || '').trim().toLowerCase()
+		const password = String(authPassword.value || '')
+
+		if (isDesktopApp) {
 			session = await desktop.auth.login(email, password)
-			authPassword.value = ''
-			updateAuthUi()
+		} else {
+			const out = await cloudLogin(email, password)
+			const token = typeof out?.token === 'string' ? out.token : ''
+			const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
+			if (!token) throw new Error('Login failed')
+			session = { id: 0, email, token, cloudUserId: cloudUserId || undefined }
+			saveWebSessionToStorage(session)
+		}
+
+		// Clear previous values immediately (prevents old account values lingering).
+		resetSavingsUi({ message: 'Not saved yet' })
+		resetGoalUi({ persistLocal: !isDesktopApp })
+
+		authPassword.value = ''
+		updateAuthUi()
+		if (isDesktopApp) {
 			await loadSavingsFromDbOrMigrate()
 			await loadGoalFromDbOrMigrate()
-		} catch (err) {
-			showAuthError(err?.message ? String(err.message) : 'Login failed')
-		} finally {
-			loginBtn.disabled = false
+		} else {
+			await loadSavingsFromCloudOrFallback()
+			await loadGoalFromCloudOrFallback()
 		}
-	})
+	} catch (err) {
+		showAuthError(err?.message ? String(err.message) : 'Login failed')
+	} finally {
+		loginBtn.disabled = false
+	}
+})
 
-	registerBtn?.addEventListener('click', async () => {
-		showAuthError('')
-		try {
-			registerBtn.disabled = true
-			const email = authEmail.value
-			const password = authPassword.value
+registerBtn?.addEventListener('click', async () => {
+	showAuthError('')
+	try {
+		registerBtn.disabled = true
+		const email = String(authEmail.value || '').trim().toLowerCase()
+		const password = String(authPassword.value || '')
+
+		if (isDesktopApp) {
 			session = await desktop.auth.register(email, password)
-			authPassword.value = ''
-			updateAuthUi()
+		} else {
+			const out = await cloudRegister(email, password)
+			const token = typeof out?.token === 'string' ? out.token : ''
+			const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
+			if (!token) throw new Error('Registration failed')
+			session = { id: 0, email, token, cloudUserId: cloudUserId || undefined }
+			saveWebSessionToStorage(session)
+		}
+
+		resetSavingsUi({ message: 'Not saved yet' })
+		resetGoalUi({ persistLocal: !isDesktopApp })
+
+		authPassword.value = ''
+		updateAuthUi()
+		if (isDesktopApp) {
 			await loadSavingsFromDbOrMigrate()
 			await loadGoalFromDbOrMigrate()
-		} catch (err) {
-			showAuthError(err?.message ? String(err.message) : 'Registration failed')
-		} finally {
-			registerBtn.disabled = false
+		} else {
+			await loadSavingsFromCloudOrFallback()
+			await loadGoalFromCloudOrFallback()
 		}
-	})
+	} catch (err) {
+		showAuthError(err?.message ? String(err.message) : 'Registration failed')
+	} finally {
+		registerBtn.disabled = false
+	}
+})
 
-	logoutBtn?.addEventListener('click', async () => {
-		showAuthError('')
-		try {
-			logoutBtn.disabled = true
+logoutBtn?.addEventListener('click', async () => {
+	showAuthError('')
+	try {
+		logoutBtn.disabled = true
+		if (isDesktopApp) {
 			await desktop.auth.logout()
 			session = null
-			savingsLog = []
-			currentSavingsInput.value = '0'
-			lastSaved.textContent = 'Log in to save'
-			updateAuthUi()
-			updateProgress()
-		} catch {
-			// ignore
-		} finally {
-			logoutBtn.disabled = false
+			resetSavingsUi({ message: 'Log in to save' })
+			resetGoalUi({ persistLocal: false })
+		} else {
+			session = null
+			saveWebSessionToStorage(null)
+			resetSavingsUi({ message: 'Not saved yet' })
+			resetGoalUi({ persistLocal: true })
 		}
-	})
-}
+		updateAuthUi()
+		updateProgress()
+	} catch {
+		// ignore
+	} finally {
+		logoutBtn.disabled = false
+	}
+})
 
 window.addEventListener('resize', () => {
 	layoutRocket()

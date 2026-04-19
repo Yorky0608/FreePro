@@ -145,6 +145,15 @@ function getUserByEmail(email) {
 	}
 }
 
+function updateUserPasswordHash({ userId, passwordHash }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (typeof passwordHash !== 'string' || passwordHash.length < 10) throw new Error('Invalid password hash')
+
+	run('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId])
+	persist()
+	return true
+}
+
 function listSavingsLog(userId) {
 	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
 	const rows = getAll(
@@ -261,6 +270,7 @@ module.exports = {
 	initDb,
 	createUser,
 	getUserByEmail,
+	updateUserPasswordHash,
 	listSavingsLog,
 	upsertSavingsMonth,
 	getSavingsMonthMeta,

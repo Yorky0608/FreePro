@@ -37,6 +37,19 @@ npm --prefix vite-project run dev
 
 Then open the URL shown in the terminal (usually `http://localhost:5173/`).
 
+### Web login + sync (optional)
+
+The browser build now supports the same email/password login UI. In web mode, it authenticates directly against the cloud API (and, when logged in, will sync savings + goal to the API).
+
+Notes:
+
+- In dev (`npm run dev`), the app uses a Vite proxy: requests go to `/api/...` and Vite forwards them to your real API (helps avoid CORS while developing locally).
+- In production (including GitHub Pages), your API must enable CORS for your site origin or the browser will fail with a network error like "Failed to fetch".
+
+To point the web build at a different API base URL, set:
+
+- `VITE_API_BASE_URL` (example: `https://your-api.example.com`)
+
 ## Run as a desktop app (Electron)
 
 This runs Vite and Electron together (Electron opens a desktop window pointing at the Vite dev server):

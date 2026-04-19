@@ -110,10 +110,39 @@ async function cloudSetGoal({ token, goalDollars }) {
 }
 
 function ensureLocalUser({ email, password }) {
-  const existing = db.getUserByEmail(email)
-  if (existing) return existing
 
+  const existing = db.getUserByEmail(email)
+  if (existing) {
+    const ok = bcrypt.compareSync(password, existing.passwordHash)
+    if (!ok) {
+      const err = new Error('Invalid email or password')
+      err.code = 'INVALID_CREDENTIALS'
+      throw err
+    }
+    return existing
+  }
+
+  // For login, only create a local account if cloud auth succeeded.
+  // (Local-only account creation should go through register.)
+  const err = new Error('No local account found. Create an account first.')
+  err.code = 'NO_LOCAL_ACCOUNT'
+  throw err
+}
+
+function ensureLocalUserAfterCloudLogin({ email, password }) {
+  const existing = db.getUserByEmail(email)
   const passwordHash = bcrypt.hashSync(password, 10)
+
+  if (existing) {
+    const ok = bcrypt.compareSync(password, existing.passwordHash)
+    if (!ok) {
+      // Cloud accepted the password, so keep local auth aligned.
+      db.updateUserPasswordHash({ userId: existing.id, passwordHash })
+      return { ...existing, passwordHash }
+    }
+    return existing
+  }
+
   return db.createUser({ email, passwordHash })
 }
 
@@ -275,8 +304,11 @@ function setupIpc() {
       cloud = null
     }
 
-    // Ensure a local user exists so savings are still stored offline.
-    const localUser = ensureLocalUser({ email, password })
+    // If cloud login succeeds, make sure local auth exists and is consistent.
+    // Otherwise, require an existing local account and validate the password.
+    const localUser = cloud?.token
+      ? ensureLocalUserAfterCloudLogin({ email, password })
+      : ensureLocalUser({ email, password })
 
     const wcId = event?.sender?.id
     if (Number.isFinite(wcId)) {
