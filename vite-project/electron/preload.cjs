@@ -17,4 +17,8 @@ contextBridge.exposeInMainWorld('desktop', {
     getGoal: () => ipcRenderer.invoke('profile:getGoal'),
     setGoal: (goalDollars) => ipcRenderer.invoke('profile:setGoal', { goalDollars }),
   },
+  ledger: {
+    listEntries: () => ipcRenderer.invoke('ledger:listEntries'),
+    addEntry: ({ clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs }) => ipcRenderer.invoke('ledger:addEntry', { clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs }),
+  },
 })

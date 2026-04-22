@@ -1,4 +1,5 @@
 import './style.css'
+import heroLogoUrl from './assets/frepro.png'
 
 const MIN = 0
 const MAX = 140
@@ -10,7 +11,7 @@ if (!app) {
 }
 
 const desktop = /** @type {any} */ (globalThis?.desktop)
-const isDesktopApp = Boolean(desktop?.auth?.login && desktop?.savings?.getLog)
+const isDesktopApp = Boolean(desktop?.auth?.login && desktop?.profile?.getGoal && desktop?.ledger?.listEntries)
 
 const DEFAULT_API_BASE_URL = 'https://1wos40ydh1.execute-api.us-east-2.amazonaws.com'
 const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (import.meta.env.DEV ? '/api' : DEFAULT_API_BASE_URL)
@@ -25,28 +26,17 @@ app.innerHTML = `
 			<div class="topbar-inner">
 				<div class="topbar-brand">The Freedom Program</div>
 				<nav class="topbar-nav" aria-label="Primary">
-					<a class="topbar-link" href="#home">Home</a>
-					<a class="topbar-link" href="#demo">Goal Demo</a>
+					<a class="topbar-link" href="#dashboard">Dashboard</a>
+					<a class="topbar-link" href="#details">Details</a>
 				</nav>
-				<a class="topbar-cta" href="#demo">Try the demo</a>
 			</div>
 		</header>
 
 		<section class="hero" id="home" aria-label="Homepage hero">
 			<div class="hero-inner">
-				<div class="hero-left">
-					<div class="hero-stat">4</div>
-					<p class="hero-text">
-						A sensible four-year, non-degree path focused on real work, intentional savings, and growing into adulthood.
-					</p>
-					<p class="hero-text">
-						This app is a mobile-first companion (starting as HTML) — the goal is to help you plan and track savings month by month.
-					</p>
-				</div>
-
-				<div class="hero-right" aria-hidden="true">
-					<div class="hero-wordmark">Freedom Program</div>
-					<div class="mark">
+				<div class="hero-brand" aria-label="Freedom Program">
+					<img class="hero-logo" id="heroLogo" src="${heroLogoUrl}" alt="Freedom Program logo" hidden />
+					<div class="mark" id="heroMark" aria-hidden="true">
 						<div class="mark-rays"></div>
 						<div class="mark-core"></div>
 					</div>
@@ -54,8 +44,8 @@ app.innerHTML = `
 			</div>
 		</section>
 
-		<section class="panel" id="demo" aria-label="Savings goal demo">
-			<h2>Freedom Program Goal</h2>
+		<section class="panel" id="dashboard" aria-label="Dashboard">
+			<h2>Dashboard</h2>
 			<div class="auth" id="authWrap" aria-label="Account">
 				<div class="auth-row">
 					<div class="auth-status" id="authStatus">Not logged in</div>
@@ -77,6 +67,41 @@ app.innerHTML = `
 					<div class="auth-error" id="authError" role="status" aria-live="polite" hidden></div>
 				</form>
 			</div>
+
+			<div class="dashboard-gate" id="dashboardGate" role="status" aria-live="polite">
+				Log in to view your summaries and goal progress.
+			</div>
+
+			<div id="dashboardContent" hidden>
+				<div class="summary" aria-label="Expense and savings summaries">
+					<div class="summary-grid">
+						<div class="metric" aria-label="Weekly savings">
+							<div class="metric-label">Weekly Savings</div>
+							<div class="metric-value" id="weeklySavings">$0</div>
+						</div>
+						<div class="metric" aria-label="Weekly expenses">
+							<div class="metric-label">Weekly Expenses</div>
+							<div class="metric-value" id="weeklyExpenses">$0</div>
+						</div>
+						<div class="metric" aria-label="Monthly savings">
+							<div class="metric-label">Monthly Savings</div>
+							<div class="metric-value" id="monthlySavings">$0</div>
+						</div>
+						<div class="metric" aria-label="Monthly expenses">
+							<div class="metric-label">Monthly Expenses</div>
+							<div class="metric-value" id="monthlyExpenses">$0</div>
+						</div>
+						<div class="metric" aria-label="Yearly savings">
+							<div class="metric-label">Yearly Savings</div>
+							<div class="metric-value" id="yearlySavings">$0</div>
+						</div>
+						<div class="metric" aria-label="Yearly expenses">
+							<div class="metric-label">Yearly Expenses</div>
+							<div class="metric-value" id="yearlyExpenses">$0</div>
+						</div>
+					</div>
+				</div>
+
 			<div class="readout" aria-label="Savings goal readout">
 				<span class="readout-label">Savings Goal</span>
 				<output class="readout-value" id="rocketValue" for="rocketRange">$0</output>
@@ -102,42 +127,94 @@ app.innerHTML = `
 			</div>
 
 			<div class="progress" aria-label="Progress toward goal">
-				<div class="progress-row">
-					<label class="progress-label" for="currentSavings">Current Savings</label>
-					<div class="progress-inputWrap">
-						<span class="progress-prefix" aria-hidden="true">$</span>
-						<input
-							id="currentSavings"
-							class="progress-input"
-							type="number"
-							inputmode="numeric"
-							min="0"
-							step="100"
-							value="0"
-							aria-label="Enter current savings amount in dollars"
-						/>
+				<div class="bar" aria-label="Bar graph of current savings compared to 4-year goal">
+					<div class="bar-track" role="img" aria-label="Current savings as a percentage of your 4-year goal">
+						<div class="bar-fill" id="goalBarFill" style="width: 0%"></div>
 					</div>
-					<output class="progress-current" id="currentSavingsOut">$0</output>
-				</div>
-				<div class="progress-sub" aria-live="polite">
-					<span class="progress-hint">Saved monthly (e.g., 1/26, 2/26)</span>
-					<span class="progress-saved" id="lastSaved">Not saved yet</span>
-				</div>
-
-				<div class="chart" aria-label="Savings over time (4 years)">
-					<canvas
-						id="savingsChart"
-						class="chart-canvas"
-						role="img"
-						aria-label="Line graph of your savings over the 4-year program"
-					></canvas>
-					<div id="chartTooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>
-					<div class="chart-meta" aria-hidden="true">
-						<span class="chart-pct" id="chartPct">0%</span>
-						<span class="chart-remaining" id="chartRemaining">Remaining: $0</span>
+					<div class="bar-meta" aria-hidden="true">
+						<span class="bar-current" id="barCurrent">Current: $0</span>
+						<span class="bar-goal" id="barGoal">Goal: $0</span>
 					</div>
 				</div>
 			</div>
+			</div>
+		</section>
+
+
+		<section class="panel" id="details" aria-label="Income, expenses, and savings details" hidden>
+			<h2>Details</h2>
+			<div class="details-toolbar" aria-label="Period controls">
+				<label class="auth-label">
+					<span>View</span>
+					<select id="detailKind" class="auth-input" aria-label="Select period">
+						<option value="week">Week</option>
+						<option value="month">Month</option>
+						<option value="year">Year</option>
+					</select>
+				</label>
+				<label class="auth-label">
+					<span>Date</span>
+					<input id="detailDate" class="auth-input" type="date" aria-label="Select a date" />
+				</label>
+				<div class="details-nav" aria-label="Navigate periods">
+					<button class="auth-btn auth-btn--secondary" id="detailPrev" type="button">Prev</button>
+					<button class="auth-btn auth-btn--secondary" id="detailNext" type="button">Next</button>
+				</div>
+			</div>
+
+			<div class="summary" aria-label="Selected period totals">
+				<div class="summary-grid">
+					<div class="metric" aria-label="Total income">
+						<div class="metric-label">Income</div>
+						<div class="metric-value" id="detailIncomeTotal">$0</div>
+					</div>
+					<div class="metric" aria-label="Total expenses">
+						<div class="metric-label">Expenses</div>
+						<div class="metric-value" id="detailExpensesTotal">$0</div>
+					</div>
+					<div class="metric" aria-label="Total savings">
+						<div class="metric-label">Savings</div>
+						<div class="metric-value" id="detailSavingsTotal">$0</div>
+					</div>
+				</div>
+			</div>
+
+			<div class="chart" aria-label="Income, expenses, and savings chart">
+				<canvas
+					id="detailChart"
+					class="chart-canvas"
+					role="img"
+					aria-label="Line graph of income, expenses, and savings"
+				></canvas>
+				<div id="detailTooltip" class="chart-tooltip" role="status" aria-live="polite" hidden></div>
+				<div class="chart-meta" aria-hidden="true">
+					<span>Income · Expenses · Savings</span>
+					<span id="detailRange"></span>
+				</div>
+			</div>
+
+			<form class="details-entry" id="entryForm" aria-label="Add income, expenses, and savings">
+				<label class="auth-label">
+					<span>Entry date</span>
+					<input id="entryDate" class="auth-input" type="date" aria-label="Entry date" />
+				</label>
+				<label class="auth-label">
+					<span>Income ($)</span>
+					<input id="entryIncome" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Income in dollars" />
+				</label>
+				<label class="auth-label">
+					<span>Expenses ($)</span>
+					<input id="entryExpenses" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Expenses in dollars" />
+				</label>
+				<label class="auth-label">
+					<span>Savings ($)</span>
+					<input id="entrySavings" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Savings in dollars" />
+				</label>
+				<div class="auth-actions">
+					<button class="auth-btn" id="entryAddBtn" type="submit">Add entry</button>
+				</div>
+				<div class="auth-error" id="entryError" role="status" aria-live="polite" hidden></div>
+			</form>
 		</section>
 
 		<div id="spacer" aria-hidden="true"></div>
@@ -147,13 +224,27 @@ app.innerHTML = `
 const range = /** @type {HTMLInputElement} */ (document.querySelector('#rocketRange'))
 const valueOut = /** @type {HTMLOutputElement} */ (document.querySelector('#rocketValue'))
 const rocket = /** @type {HTMLDivElement} */ (document.querySelector('#rocket'))
-const currentSavingsInput = /** @type {HTMLInputElement} */ (document.querySelector('#currentSavings'))
-const currentSavingsOut = /** @type {HTMLOutputElement} */ (document.querySelector('#currentSavingsOut'))
-const lastSaved = /** @type {HTMLSpanElement} */ (document.querySelector('#lastSaved'))
-const chartCanvas = /** @type {HTMLCanvasElement} */ (document.querySelector('#savingsChart'))
-const chartPct = /** @type {HTMLSpanElement} */ (document.querySelector('#chartPct'))
-const chartRemaining = /** @type {HTMLSpanElement} */ (document.querySelector('#chartRemaining'))
-const chartTooltip = /** @type {HTMLDivElement} */ (document.querySelector('#chartTooltip'))
+
+const detailChartCanvas = /** @type {HTMLCanvasElement} */ (document.querySelector('#detailChart'))
+const detailTooltip = /** @type {HTMLDivElement} */ (document.querySelector('#detailTooltip'))
+const detailRange = /** @type {HTMLSpanElement} */ (document.querySelector('#detailRange'))
+
+const detailKindSelect = /** @type {HTMLSelectElement} */ (document.querySelector('#detailKind'))
+const detailDateInput = /** @type {HTMLInputElement} */ (document.querySelector('#detailDate'))
+const detailPrevBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#detailPrev'))
+const detailNextBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#detailNext'))
+
+const detailIncomeTotalOut = /** @type {HTMLDivElement} */ (document.querySelector('#detailIncomeTotal'))
+const detailExpensesTotalOut = /** @type {HTMLDivElement} */ (document.querySelector('#detailExpensesTotal'))
+const detailSavingsTotalOut = /** @type {HTMLDivElement} */ (document.querySelector('#detailSavingsTotal'))
+
+const entryForm = /** @type {HTMLFormElement} */ (document.querySelector('#entryForm'))
+const entryDateInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryDate'))
+const entryIncomeInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryIncome'))
+const entryExpensesInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryExpenses'))
+const entrySavingsInput = /** @type {HTMLInputElement} */ (document.querySelector('#entrySavings'))
+const entryAddBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#entryAddBtn'))
+const entryError = /** @type {HTMLDivElement} */ (document.querySelector('#entryError'))
 
 const authWrap = /** @type {HTMLDivElement} */ (document.querySelector('#authWrap'))
 const authStatus = /** @type {HTMLDivElement} */ (document.querySelector('#authStatus'))
@@ -165,43 +256,403 @@ const registerBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#r
 const logoutBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#logoutBtn'))
 const authError = /** @type {HTMLDivElement} */ (document.querySelector('#authError'))
 
-const STORAGE_KEY = 'rocket-slider:savings-log:v2'
-const STORAGE_KEY_V1 = 'rocket-slider:savings-log:v1'
+const dashboardGate = /** @type {HTMLDivElement} */ (document.querySelector('#dashboardGate'))
+const dashboardContent = /** @type {HTMLDivElement} */ (document.querySelector('#dashboardContent'))
+
+const weeklySavingsOut = /** @type {HTMLDivElement} */ (document.querySelector('#weeklySavings'))
+const weeklyExpensesOut = /** @type {HTMLDivElement} */ (document.querySelector('#weeklyExpenses'))
+const monthlySavingsOut = /** @type {HTMLDivElement} */ (document.querySelector('#monthlySavings'))
+const monthlyExpensesOut = /** @type {HTMLDivElement} */ (document.querySelector('#monthlyExpenses'))
+const yearlySavingsOut = /** @type {HTMLDivElement} */ (document.querySelector('#yearlySavings'))
+const yearlyExpensesOut = /** @type {HTMLDivElement} */ (document.querySelector('#yearlyExpenses'))
+
+const goalBarFill = /** @type {HTMLDivElement} */ (document.querySelector('#goalBarFill'))
+const barCurrent = /** @type {HTMLSpanElement} */ (document.querySelector('#barCurrent'))
+const barGoal = /** @type {HTMLSpanElement} */ (document.querySelector('#barGoal'))
+
+const heroLogo = /** @type {HTMLImageElement} */ (document.querySelector('#heroLogo'))
+const heroMark = /** @type {HTMLDivElement} */ (document.querySelector('#heroMark'))
+
 const GOAL_STORAGE_KEY = 'rocket-slider:goal-dollars:v1'
+const LEDGER_STORAGE_PREFIX = 'freedom-program:ledger:v1:'
+const LEDGER_CLOUD_SYNC_PREFIX = 'freedom-program:ledger-cloud-sync:v1:'
+const LEDGER_CLOUD_PULL_PATH = '/ledger/pull'
+const LEDGER_CLOUD_UPSERT_PATH = '/ledger/upsert'
 const PROGRAM_YEARS = 4
 
-/** @type {Array<{ month: number, dollars: number }>} */
-let savingsLog = isDesktopApp ? [] : loadSavingsLogFromLocalStorage()
-
-/** @type {null | {
-	canvasW: number,
-	canvasH: number,
-	start: number,
-	end: number,
-	padL: number,
-	padT: number,
-	plotW: number,
-	plotH: number,
-	yMax: number,
-	log: Array<{ month: number, dollars: number }>,
-	points: Array<{ month: number, dollars: number, x: number, y: number }>,
-}} */
-let chartState = null
-
-let lastTooltipText = ''
-
-// Initialize the current savings input from the most recent entry (if any).
-if (savingsLog.length > 0) {
-	const latest = savingsLog[savingsLog.length - 1]
-	currentSavingsInput.value = String(latest.dollars)
-	lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
+function makeClientId() {
+	try {
+		const cryptoObj = /** @type {any} */ (globalThis?.crypto)
+		if (cryptoObj?.randomUUID) return String(cryptoObj.randomUUID())
+	} catch {
+		// ignore
+	}
+	return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
+
+function getLedgerCloudSyncKeyFor(userKey) {
+	const normalized = String(userKey || '').trim().toLowerCase()
+	return `${LEDGER_CLOUD_SYNC_PREFIX}${normalized || 'anonymous'}`
+}
+
+function getLedgerCloudSyncKey() {
+	return getLedgerCloudSyncKeyFor(session?.cloudUserId || session?.email || '')
+}
+
+function loadLedgerCloudSyncState() {
+	try {
+		const primaryKey = getLedgerCloudSyncKey()
+		let raw = localStorage.getItem(primaryKey)
+
+		// Migration: older desktop sessions didn’t have `cloudUserId`, so the key
+		// would have been based on `email`. If we now have a cloudUserId key but
+		// it doesn't exist yet, carry over the legacy state.
+		const legacyEmailKey = session?.cloudUserId && session?.email ? getLedgerCloudSyncKeyFor(session.email) : ''
+		if (!raw && legacyEmailKey && legacyEmailKey !== primaryKey) {
+			const legacyRaw = localStorage.getItem(legacyEmailKey)
+			if (legacyRaw) {
+				raw = legacyRaw
+				try {
+					localStorage.setItem(primaryKey, legacyRaw)
+					localStorage.removeItem(legacyEmailKey)
+				} catch {
+					// ignore
+				}
+			}
+		}
+
+		if (!raw) return { pendingClientIds: [], lastPullMs: 0 }
+
+		const parsed = JSON.parse(raw)
+		const pending = Array.isArray(parsed?.pendingClientIds) ? parsed.pendingClientIds.filter((x) => typeof x === 'string' && x.trim()) : []
+		const lastPullMs = Number(parsed?.lastPullMs)
+		return {
+			pendingClientIds: [...new Set(pending)],
+			lastPullMs: Number.isFinite(lastPullMs) && lastPullMs > 0 ? lastPullMs : 0,
+		}
+	} catch {
+		return { pendingClientIds: [], lastPullMs: 0 }
+	}
+}
+
+function saveLedgerCloudSyncState(state) {
+	try {
+		localStorage.setItem(getLedgerCloudSyncKey(), JSON.stringify(state))
+	} catch {
+		// ignore
+	}
+}
+
+function enqueueLedgerForCloudSync(clientId) {
+	if (!clientId) return
+	const state = loadLedgerCloudSyncState()
+	if (!state.pendingClientIds.includes(clientId)) {
+		state.pendingClientIds.push(clientId)
+		saveLedgerCloudSyncState(state)
+	}
+}
+
+function dequeueLedgerCloudSync(clientId) {
+	if (!clientId) return
+	const state = loadLedgerCloudSyncState()
+	const next = state.pendingClientIds.filter((x) => x !== clientId)
+	if (next.length === state.pendingClientIds.length) return
+	state.pendingClientIds = next
+	saveLedgerCloudSyncState(state)
+}
+
+function startOfLocalDayMs(date) {
+	const d = new Date(date)
+	d.setHours(0, 0, 0, 0)
+	return d.getTime()
+}
+
+function isoDateValue(ms) {
+	const d = new Date(ms)
+	const y = d.getFullYear()
+	const m = String(d.getMonth() + 1).padStart(2, '0')
+	const day = String(d.getDate()).padStart(2, '0')
+	return `${y}-${m}-${day}`
+}
+
+function parseDateInputToDayMs(value) {
+	const raw = String(value || '').trim()
+	if (!raw) return startOfLocalDayMs(new Date())
+	const [y, m, d] = raw.split('-').map((x) => Number(x))
+	if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return startOfLocalDayMs(new Date())
+	return startOfLocalDayMs(new Date(y, m - 1, d))
+}
+
+function getLedgerStorageKey() {
+	const email = String(session?.email || '').trim().toLowerCase()
+	return `${LEDGER_STORAGE_PREFIX}${email || 'anonymous'}`
+}
+
+function loadLedgerFromLocalStorage() {
+	try {
+		const raw = localStorage.getItem(getLedgerStorageKey())
+		if (!raw) return []
+		const data = JSON.parse(raw)
+		if (!Array.isArray(data)) return []
+
+		let changed = false
+		const cleaned = data
+			.map((e) => {
+				let clientId = typeof e?.clientId === 'string' ? e.clientId.trim() : ''
+				if (!clientId) {
+					clientId = makeClientId()
+					changed = true
+				}
+				return {
+					id: e?.id ?? clientId,
+					clientId,
+					dayMs: Number(e?.dayMs),
+					incomeDollars: Number(e?.incomeDollars) || 0,
+					expensesDollars: Number(e?.expensesDollars) || 0,
+					savingsDollars: Number(e?.savingsDollars) || 0,
+				}
+			})
+			.filter((e) => Number.isFinite(e.dayMs) && e.dayMs > 0)
+			.sort((a, b) => a.dayMs - b.dayMs)
+
+		if (changed) {
+			ledgerEntries = cleaned
+			saveLedgerToLocalStorage()
+		}
+		return cleaned
+	} catch {
+		return []
+	}
+}
+
+function saveLedgerToLocalStorage() {
+	try {
+		localStorage.setItem(getLedgerStorageKey(), JSON.stringify(ledgerEntries))
+	} catch {
+		// ignore
+	}
+}
+
+async function loadLedgerEntriesFromDesktop() {
+	if (!isDesktopApp) return
+	if (!session) {
+		ledgerEntries = []
+		return
+	}
+	try {
+		const rows = await desktop.ledger.listEntries()
+		ledgerEntries = Array.isArray(rows)
+			? rows
+				.map((r) => ({
+					id: r?.id ?? 0,
+					clientId: typeof r?.clientId === 'string' ? r.clientId : `legacy-${r?.id ?? 0}`,
+					dayMs: Number(r?.dayMs),
+					incomeDollars: Number(r?.incomeDollars) || 0,
+					expensesDollars: Number(r?.expensesDollars) || 0,
+					savingsDollars: Number(r?.savingsDollars) || 0,
+				}))
+				.filter((e) => Number.isFinite(e.dayMs) && e.dayMs > 0)
+				.sort((a, b) => a.dayMs - b.dayMs)
+			: []
+	} catch {
+		ledgerEntries = []
+	}
+}
+
+async function loadLedgerEntriesFromStorage() {
+	if (!session) {
+		ledgerEntries = []
+		return
+	}
+	if (isDesktopApp) {
+		await loadLedgerEntriesFromDesktop()
+		return
+	}
+	ledgerEntries = loadLedgerFromLocalStorage()
+}
+
+function upsertLedgerEntryInMemory(entry) {
+	if (!entry?.clientId) return
+	const idx = ledgerEntries.findIndex((e) => e.clientId === entry.clientId)
+	if (idx >= 0) ledgerEntries[idx] = { ...ledgerEntries[idx], ...entry }
+	else ledgerEntries.push(entry)
+	ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
+}
+
+async function upsertLedgerEntryLocally(entry) {
+	if (!session) return
+	if (!entry?.clientId) return
+
+	if (isDesktopApp) {
+		try {
+			const out = await desktop.ledger.addEntry({
+				clientId: entry.clientId,
+				dayMs: entry.dayMs,
+				incomeDollars: entry.incomeDollars,
+				expensesDollars: entry.expensesDollars,
+				savingsDollars: entry.savingsDollars,
+				createdAtMs: entry.createdAtMs,
+				updatedAtMs: entry.updatedAtMs,
+			})
+			const id = Number(out?.id)
+			upsertLedgerEntryInMemory({ ...entry, id: Number.isFinite(id) && id > 0 ? id : entry.id })
+		} catch {
+			// ignore
+		}
+		return
+	}
+
+	upsertLedgerEntryInMemory(entry)
+	saveLedgerToLocalStorage()
+}
+
+async function cloudLedgerPull({ token, sinceMs }) {
+	return apiJson({ method: 'GET', apiPath: LEDGER_CLOUD_PULL_PATH, token, query: { sinceMs } })
+}
+
+async function cloudLedgerUpsert({ token, entry }) {
+	return apiJson({
+		method: 'POST',
+		apiPath: LEDGER_CLOUD_UPSERT_PATH,
+		token,
+		body: {
+			clientId: entry.clientId,
+			dayMs: entry.dayMs,
+			incomeDollars: entry.incomeDollars,
+			expensesDollars: entry.expensesDollars,
+			savingsDollars: entry.savingsDollars,
+			createdAtMs: entry.createdAtMs,
+			updatedAtMs: entry.updatedAtMs,
+		},
+	})
+}
+
+let ledgerCloudSyncInFlight = false
+async function syncLedgerWithCloud() {
+	if (!session?.token) return
+	if (!session) return
+	if (ledgerCloudSyncInFlight) return
+	ledgerCloudSyncInFlight = true
+
+	try {
+		const state = loadLedgerCloudSyncState()
+		let maxSeen = state.lastPullMs || 0
+
+		try {
+			const out = await cloudLedgerPull({ token: session.token, sinceMs: state.lastPullMs || 0 })
+			const items = Array.isArray(out?.items) ? out.items : []
+			for (const item of items) {
+				const clientId = typeof item?.clientId === 'string' ? item.clientId.trim() : ''
+				const dayMs = Number(item?.dayMs)
+				const incomeDollars = Math.max(0, Math.round(Number(item?.incomeDollars) || 0))
+				const expensesDollars = Math.max(0, Math.round(Number(item?.expensesDollars) || 0))
+				const savingsDollars = Math.max(0, Math.round(Number(item?.savingsDollars) || 0))
+				const updatedAtMs = Number(item?.updatedAtMs)
+				const createdAtMs = Number(item?.createdAtMs)
+
+				if (!clientId) continue
+				if (!Number.isFinite(dayMs) || dayMs <= 0) continue
+				if (Number.isFinite(updatedAtMs) && updatedAtMs > maxSeen) maxSeen = updatedAtMs
+				await upsertLedgerEntryLocally({
+					id: clientId,
+					clientId,
+					dayMs: Math.round(dayMs),
+					incomeDollars,
+					expensesDollars,
+					savingsDollars,
+					createdAtMs: Number.isFinite(createdAtMs) && createdAtMs > 0 ? Math.round(createdAtMs) : undefined,
+					updatedAtMs: Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? Math.round(updatedAtMs) : undefined,
+				})
+			}
+		} catch (err) {
+			warnWebSyncIfNeeded(err)
+		}
+
+		state.lastPullMs = maxSeen
+
+		// Push pending local entries (cloud backup)
+		const pending = Array.isArray(state.pendingClientIds) ? state.pendingClientIds.slice() : []
+		/** @type {string[]} */
+		const stillPending = []
+		for (const clientId of pending) {
+			const entry = ledgerEntries.find((e) => e.clientId === clientId)
+			if (!entry) continue
+			try {
+				await cloudLedgerUpsert({ token: session.token, entry })
+			} catch (err) {
+				warnWebSyncIfNeeded(err)
+				stillPending.push(clientId)
+			}
+		}
+		state.pendingClientIds = stillPending
+		saveLedgerCloudSyncState(state)
+	} finally {
+		ledgerCloudSyncInFlight = false
+	}
+}
+
+async function addLedgerEntry({ dayMs, incomeDollars, expensesDollars, savingsDollars }) {
+	if (!session) throw new Error('Not logged in')
+	const now = Date.now()
+	const entry = {
+		id: '',
+		clientId: makeClientId(),
+		dayMs: Math.round(Number(dayMs)),
+		incomeDollars: Math.max(0, Math.round(Number(incomeDollars) || 0)),
+		expensesDollars: Math.max(0, Math.round(Number(expensesDollars) || 0)),
+		savingsDollars: Math.max(0, Math.round(Number(savingsDollars) || 0)),
+		createdAtMs: now,
+		updatedAtMs: now,
+	}
+	entry.id = entry.clientId
+	if (!Number.isFinite(entry.dayMs) || entry.dayMs <= 0) throw new Error('Invalid date')
+	if (entry.incomeDollars <= 0 && entry.expensesDollars <= 0 && entry.savingsDollars <= 0) {
+		throw new Error('Enter at least one amount')
+	}
+
+	if (isDesktopApp) {
+		const out = await desktop.ledger.addEntry({
+			clientId: entry.clientId,
+			dayMs: entry.dayMs,
+			incomeDollars: entry.incomeDollars,
+			expensesDollars: entry.expensesDollars,
+			savingsDollars: entry.savingsDollars,
+			createdAtMs: entry.createdAtMs,
+			updatedAtMs: entry.updatedAtMs,
+		})
+		const id = Number(out?.id)
+		ledgerEntries.push({ ...entry, id: Number.isFinite(id) && id > 0 ? id : entry.id })
+		ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
+		enqueueLedgerForCloudSync(entry.clientId)
+		void syncLedgerWithCloud()
+		return
+	}
+
+	ledgerEntries.push(entry)
+	ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
+	saveLedgerToLocalStorage()
+	enqueueLedgerForCloudSync(entry.clientId)
+	void syncLedgerWithCloud()
+}
+
+/** @type {null | { canvasW: number, canvasH: number, padL: number, padT: number, plotW: number, plotH: number, labels: string[], x: number[], series: Array<{ key: string, values: number[], points: Array<{ x: number, y: number, v: number }> }> }} */
+let detailChartState = null
+
+/** @type {'week' | 'month' | 'year'} */
+let detailKind = 'week'
+
+let detailAnchorDayMs = (() => {
+	const d = new Date()
+	d.setHours(0, 0, 0, 0)
+	return d.getTime()
+})()
+
+/** @type {Array<{ id: number | string, clientId: string, dayMs: number, incomeDollars: number, expensesDollars: number, savingsDollars: number, createdAtMs?: number, updatedAtMs?: number }>} */
+let ledgerEntries = []
 
 if (authWrap) {
 	authWrap.hidden = false
 }
-
-setSavingsEnabled(!isDesktopApp ? true : Boolean(session))
 
 // Apply any locally saved goal immediately (web demo, or pre-login in desktop).
 try {
@@ -213,6 +664,64 @@ try {
 } catch {
 	// ignore
 }
+// Optional logo override: if /logo.png exists (in public/), show it.
+if (heroLogo) {
+	heroLogo.addEventListener('load', () => {
+		heroLogo.hidden = false
+		if (heroMark) heroMark.hidden = true
+	})
+	heroLogo.addEventListener('error', () => {
+		heroLogo.hidden = true
+		if (heroMark) heroMark.hidden = false
+	})
+}
+
+const homeSection = /** @type {HTMLElement} */ (document.querySelector('#home'))
+const dashboardSection = /** @type {HTMLElement} */ (document.querySelector('#dashboard'))
+const detailsSection = /** @type {HTMLElement} */ (document.querySelector('#details'))
+
+function normalizeRoute(hash) {
+	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
+	const allowed = new Set(['home', 'dashboard', 'details'])
+	return allowed.has(raw) ? raw : 'dashboard'
+}
+
+function renderRoute() {
+	const route = normalizeRoute(location.hash)
+	const needsAuth = route === 'details'
+	const authed = Boolean(session)
+	const target = needsAuth && !authed ? 'dashboard' : route
+
+	if (homeSection) homeSection.hidden = target !== 'home'
+	if (dashboardSection) dashboardSection.hidden = target !== 'dashboard'
+	if (detailsSection) detailsSection.hidden = target !== 'details'
+
+	// Ensure charts render when navigating to details.
+	if (target === 'details') drawDetails()
+
+	// Avoid weird scroll positions when switching pages.
+	try {
+		window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+	} catch {
+		window.scrollTo(0, 0)
+	}
+
+	const hasExplicitHash = typeof location.hash === 'string' && location.hash.length > 1
+	if (!hasExplicitHash) {
+		// Default route should be visible in the URL, but don't add a history entry.
+		try {
+			history.replaceState(null, '', `#${target}`)
+		} catch {
+			location.hash = `#${target}`
+		}
+	} else if (target !== route) {
+		// Keep the URL consistent with the redirect.
+		location.hash = `#${target}`
+	}
+}
+
+window.addEventListener('hashchange', renderRoute)
+renderRoute()
 
 updateAuthUi()
 void refreshSessionAndLoad()
@@ -300,9 +809,39 @@ async function apiJson({ method, apiPath, token, body, query, contentType }) {
 	}
 
 	if (!res.ok) {
-		const msg = typeof data?.error === 'string' ? data.error : `Request failed (${res.status})`
-		const err = new Error(msg)
+		const backendMsg =
+			typeof data?.error === 'string'
+				? data.error
+				: typeof data?.message === 'string'
+					? data.message
+					: (typeof text === 'string' && text.trim() ? text.trim() : '')
+		const msg = backendMsg || `Request failed (${res.status})`
+		const err = new Error(`${msg} [${method} ${url.pathname}]`)
 		err.status = res.status
+		err.apiPath = apiPath
+		err.responseText = typeof text === 'string' ? text.slice(0, 1000) : ''
+
+		// If a previously saved web session token becomes invalid (common after changing
+		// JWT secrets), don't silently keep the user "logged in" with stale local data.
+		if (!isDesktopApp && res.status === 401 && token) {
+			try {
+				saveWebSessionToStorage(null)
+			} catch {
+				// ignore
+			}
+			session = null
+			updateAuthUi()
+			showAuthError('Session expired. Please log in again to refresh cloud data.')
+		}
+
+		// In desktop mode, ledger sync failures are otherwise silent; log details.
+		if (isDesktopApp) {
+			try {
+				console.warn('API error', { status: res.status, method, path: url.pathname, body: err.responseText })
+			} catch {
+				// ignore
+			}
+		}
 		throw err
 	}
 
@@ -317,14 +856,6 @@ async function cloudRegister(email, password) {
 
 async function cloudLogin(email, password) {
 	return apiJson({ method: 'POST', apiPath: '/auth/login', body: { email, password }, contentType: 'text/plain' })
-}
-
-async function cloudSaveMonth({ token, monthMs, dollars }) {
-	return apiJson({ method: 'POST', apiPath: '/sync/save', token, body: { monthMs, dollars } })
-}
-
-async function cloudPull({ token, sinceMs }) {
-	return apiJson({ method: 'GET', apiPath: '/sync/pull', token, query: { sinceMs } })
 }
 
 async function cloudGetGoal({ token }) {
@@ -350,6 +881,13 @@ function parseMoneyInput(input) {
 function formatDollars(dollars) {
 	const safe = Math.max(0, Math.round(dollars))
 	return `$${safe.toLocaleString()}`
+}
+
+function formatSignedDollars(dollars) {
+	const rounded = Math.round(Number(dollars) || 0)
+	const sign = rounded < 0 ? '-' : ''
+	const abs = Math.abs(rounded)
+	return `${sign}$${abs.toLocaleString()}`
 }
 
 function clamp(n, min, max) {
@@ -379,57 +917,6 @@ function formatMonthLabel(monthMs) {
 	return `${m}/${yy}`
 }
 
-function loadSavingsLogFromLocalStorage() {
-	try {
-		// Load v2 first, else attempt migration from v1.
-		let raw = localStorage.getItem(STORAGE_KEY)
-		if (!raw) raw = localStorage.getItem(STORAGE_KEY_V1)
-		if (!raw) return []
-		const parsed = JSON.parse(raw)
-		if (!Array.isArray(parsed)) return []
-
-		// Accept either {month, dollars} (v2) or {day, dollars} (v1).
-		const cleaned = parsed
-			.map((p) => {
-				const monthCandidate = p?.month ?? p?.day
-				return { month: Number(monthCandidate), dollars: Number(p?.dollars) }
-			})
-			.filter((p) => Number.isFinite(p.month) && Number.isFinite(p.dollars) && p.month > 0)
-			.map((p) => ({
-				month: startOfLocalMonthMs(new Date(p.month)),
-				dollars: Math.max(0, p.dollars),
-			}))
-			.sort((a, b) => a.month - b.month)
-
-		// De-dupe (keep last value for the month).
-		/** @type {Map<number, number>} */
-		const byMonth = new Map()
-		for (const p of cleaned) byMonth.set(p.month, p.dollars)
-		const result = [...byMonth.entries()]
-			.map(([month, dollars]) => ({ month, dollars }))
-			.sort((a, b) => a.month - b.month)
-
-		// Write back as v2 to keep future loads simple.
-		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(result))
-		} catch {
-			// ignore
-		}
-		return result
-	} catch {
-		return []
-	}
-}
-
-function saveSavingsLog() {
-	if (isDesktopApp) return
-	try {
-		localStorage.setItem(STORAGE_KEY, JSON.stringify(savingsLog))
-	} catch {
-		// ignore (private mode / storage disabled)
-	}
-}
-
 function loadGoalDollarsFromLocalStorage() {
 	try {
 		const raw = localStorage.getItem(GOAL_STORAGE_KEY)
@@ -456,14 +943,6 @@ function showAuthError(message) {
 	authError.hidden = !message
 }
 
-function resetSavingsUi({ message }) {
-	savingsLog = []
-	currentSavingsInput.value = '0'
-	lastSaved.textContent = message
-	if (!isDesktopApp) saveSavingsLog()
-	updateProgress()
-}
-
 function resetGoalUi({ persistLocal }) {
 	setGoalUnits(0)
 	if (persistLocal) saveGoalDollarsToLocalStorage(0)
@@ -484,33 +963,46 @@ function updateAuthUi() {
 	if (!authStatus || !logoutBtn || !authForm) return
 
 	if (session) {
-		authStatus.textContent = `Logged in as ${session.email}`
+		const cloudStatus = isDesktopApp ? (session?.token ? ' (cloud sync ON)' : ' (cloud sync OFF)') : ''
+		authStatus.textContent = `Logged in as ${session.email}${cloudStatus}`
 		logoutBtn.hidden = false
 		authForm.classList.add('auth-form--hidden')
-		setSavingsEnabled(true)
 		showAuthError('')
 	} else {
 		authStatus.textContent = 'Not logged in'
 		logoutBtn.hidden = true
 		authForm.classList.remove('auth-form--hidden')
-		setSavingsEnabled(!isDesktopApp)
 		showAuthError('')
 	}
+	setDashboardAuthGate(Boolean(session))
+	renderRoute()
 }
 
-function setSavingsEnabled(enabled) {
-	if (!currentSavingsInput) return
-	if (!isDesktopApp) {
-		// Web demo stays editable even when logged out (localStorage fallback).
-		currentSavingsInput.disabled = false
-		currentSavingsInput.classList.remove('progress-input--disabled')
-		return
-	}
-	currentSavingsInput.disabled = !enabled
-	currentSavingsInput.classList.toggle('progress-input--disabled', !enabled)
-	if (!enabled) {
-		lastSaved.textContent = isDesktopApp ? 'Log in to save' : 'Not saved yet'
-	}
+function setDashboardAuthGate(isAuthed) {
+	if (dashboardGate) dashboardGate.hidden = isAuthed
+	if (dashboardContent) dashboardContent.hidden = !isAuthed
+}
+
+function updateDashboardSummary({ goalDollars, currentDollars }) {
+	if (!weeklySavingsOut || !monthlySavingsOut || !yearlySavingsOut) return
+
+	const today = startOfLocalDayMs(new Date())
+	const week = buildPeriodSeries('week', today).totals
+	const month = buildPeriodSeries('month', today).totals
+	const year = buildPeriodSeries('year', today).totals
+
+	weeklySavingsOut.textContent = formatDollars(week.savingsDollars)
+	monthlySavingsOut.textContent = formatDollars(month.savingsDollars)
+	yearlySavingsOut.textContent = formatDollars(year.savingsDollars)
+
+	if (weeklyExpensesOut) weeklyExpensesOut.textContent = formatDollars(week.expensesDollars)
+	if (monthlyExpensesOut) monthlyExpensesOut.textContent = formatDollars(month.expensesDollars)
+	if (yearlyExpensesOut) yearlyExpensesOut.textContent = formatDollars(year.expensesDollars)
+
+	const pct = goalDollars > 0 ? clamp(currentDollars / goalDollars, 0, 1) : 0
+	if (goalBarFill) goalBarFill.style.width = `${Math.round(pct * 1000) / 10}%`
+	if (barCurrent) barCurrent.textContent = `Current: ${formatDollars(currentDollars)}`
+	if (barGoal) barGoal.textContent = `Goal: ${formatDollars(goalDollars)}`
 }
 
 async function refreshSessionAndLoad() {
@@ -526,58 +1018,24 @@ async function refreshSessionAndLoad() {
 	updateAuthUi()
 	if (isDesktopApp) {
 		if (session) {
-			await loadSavingsFromDbOrMigrate()
 			await loadGoalFromDbOrMigrate()
+			await loadLedgerEntriesFromStorage()
+			void syncLedgerWithCloud()
 		}
+		updateProgress()
+		renderRoute()
 		return
 	}
 
-	// Web mode: always use localStorage for baseline, and if logged in also pull from cloud.
+	// Web mode: if logged in, pull goal from cloud + ledger from localStorage.
 	if (session?.token) {
-		// Clear any previous visual state before loading the account.
-		resetSavingsUi({ message: 'Not saved yet' })
 		resetGoalUi({ persistLocal: false })
-
-		await loadSavingsFromCloudOrFallback()
 		await loadGoalFromCloudOrFallback()
+		await loadLedgerEntriesFromStorage()
+		void syncLedgerWithCloud()
 	}
 	updateProgress()
-}
-
-async function loadSavingsFromCloudOrFallback() {
-	if (!session?.token) return
-	let out = null
-	try {
-		out = await cloudPull({ token: session.token, sinceMs: 0 })
-	} catch (err) {
-		warnWebSyncIfNeeded(err)
-		out = null
-	}
-
-	const items = Array.isArray(out?.items) ? out.items : []
-	/** @type {Array<{ month: number, dollars: number }>} */
-	const next = []
-	for (const item of items) {
-		const month = Number(item?.monthMs)
-		const dollars = Number(item?.dollars)
-		if (!Number.isFinite(month) || month <= 0) continue
-		if (!Number.isFinite(dollars) || dollars < 0) continue
-		next.push({ month: startOfLocalMonthMs(new Date(month)), dollars: Math.max(0, Math.round(dollars)) })
-	}
-	next.sort((a, b) => a.month - b.month)
-	savingsLog = next
-	saveSavingsLog()
-
-	if (savingsLog.length > 0) {
-		const latest = savingsLog[savingsLog.length - 1]
-		currentSavingsInput.value = String(latest.dollars)
-		lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
-	} else {
-		currentSavingsInput.value = '0'
-		lastSaved.textContent = 'Not saved yet'
-	}
-
-	updateProgress()
+	renderRoute()
 }
 
 async function loadGoalFromCloudOrFallback() {
@@ -601,36 +1059,10 @@ async function loadGoalFromCloudOrFallback() {
 	resetGoalUi({ persistLocal: true })
 }
 
-async function loadSavingsFromDbOrMigrate() {
-	if (!session) return
-
-	let log = []
-	try {
-		log = await desktop.savings.getLog()
-	} catch {
-		log = []
-	}
-
-	if (Array.isArray(log) && log.length > 0) {
-		savingsLog = log
-	} else {
-		// New/empty accounts start clean (no browser localStorage migration).
-		savingsLog = []
-	}
-
-	if (savingsLog.length > 0) {
-		const latest = savingsLog[savingsLog.length - 1]
-		currentSavingsInput.value = String(latest.dollars)
-		lastSaved.textContent = `Last saved: ${formatMonthLabel(latest.month)}`
-	} else {
-		currentSavingsInput.value = '0'
-		lastSaved.textContent = 'Not saved yet'
-	}
-	updateProgress()
-}
 
 let suppressGoalPersist = false
 let goalTimer = null
+let didWarnDesktopGoalSync = false
 
 function setGoalUnits(units) {
 	suppressGoalPersist = true
@@ -676,11 +1108,21 @@ async function persistGoalDollars(goalDollars) {
 
 	if (isDesktopApp) {
 		if (!session) return
+		if (!session?.token) {
+			if (!didWarnDesktopGoalSync) {
+				didWarnDesktopGoalSync = true
+				showAuthError('Cloud sync is unavailable (no AWS token). Try logging out and logging back in.')
+			}
+			return
+		}
 		if (!desktop?.profile?.setGoal) return
 		try {
 			await desktop.profile.setGoal(safe)
 		} catch {
-			// ignore
+			if (!didWarnDesktopGoalSync) {
+				didWarnDesktopGoalSync = true
+				showAuthError('Cloud sync failed while saving your goal. Check your API/Lambda logs for /profile/goal.')
+			}
 		}
 		return
 	}
@@ -692,48 +1134,6 @@ async function persistGoalDollars(goalDollars) {
 		warnWebSyncIfNeeded(err)
 		// ignore
 	}
-}
-
-async function persistSavingsForMonth(monthMs, dollars) {
-	upsertSavingsForMonth(monthMs, dollars)
-	if (isDesktopApp) {
-		if (!session) return
-		try {
-			await desktop.savings.upsertMonth(startOfLocalMonthMs(new Date(monthMs)), Math.max(0, Math.round(dollars)))
-		} catch {
-			// ignore
-		}
-		return
-	}
-
-	saveSavingsLog()
-	if (!session?.token) return
-	try {
-		await cloudSaveMonth({ token: session.token, monthMs: startOfLocalMonthMs(new Date(monthMs)), dollars: Math.max(0, Math.round(dollars)) })
-	} catch (err) {
-		warnWebSyncIfNeeded(err)
-		// ignore
-	}
-}
-
-function upsertSavingsForMonth(monthMs, dollars) {
-	const month = startOfLocalMonthMs(new Date(monthMs))
-	const value = Math.max(0, Math.round(dollars))
-	const i = savingsLog.findIndex((p) => p.month === month)
-	if (i >= 0) savingsLog[i] = { month, dollars: value }
-	else savingsLog.push({ month, dollars: value })
-	savingsLog.sort((a, b) => a.month - b.month)
-}
-
-function getPreviewLog() {
-	const thisMonth = startOfLocalMonthMs(new Date())
-	const current = parseMoneyInput(currentSavingsInput.value)
-	const copy = savingsLog.slice()
-	const i = copy.findIndex((p) => p.month === thisMonth)
-	if (i >= 0) copy[i] = { month: thisMonth, dollars: current }
-	else copy.push({ month: thisMonth, dollars: current })
-	copy.sort((a, b) => a.month - b.month)
-	return copy
 }
 
 function layoutRocket() {
@@ -756,18 +1156,151 @@ function layoutRocket() {
 	rocket.style.transform = `translate3d(${x}px, ${top}px, 0) translate3d(0, -50%, 0)`
 }
 
-function drawSavingsChart() {
-	const ctx = chartCanvas.getContext('2d')
+function startOfLocalWeekMs(date) {
+	const d = new Date(date)
+	const day = d.getDay() // 0=Sun ... 6=Sat
+	const diff = (day + 6) % 7 // Monday=0
+	d.setDate(d.getDate() - diff)
+	d.setHours(0, 0, 0, 0)
+	return d.getTime()
+}
+
+function formatShortDate(ms) {
+	const d = new Date(ms)
+	return d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+}
+
+function formatYear(ms) {
+	return String(new Date(ms).getFullYear())
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function fourYearWindowStartDayMs() {
+	const now = new Date()
+	const start = new Date(now.getFullYear() - PROGRAM_YEARS, now.getMonth(), now.getDate())
+	return startOfLocalDayMs(start)
+}
+
+function sumLedgerSavingsSince(startDayMs) {
+	const start = Number(startDayMs)
+	if (!Number.isFinite(start)) return 0
+	let total = 0
+	for (const e of ledgerEntries) {
+		const dayMs = Number(e?.dayMs)
+		if (!Number.isFinite(dayMs) || dayMs < start) continue
+		total += Math.max(0, Number(e?.savingsDollars) || 0)
+	}
+	return total
+}
+
+function getCurrentSavingsForGoalProgress() {
+	if (!session) return 0
+	return sumLedgerSavingsSince(fourYearWindowStartDayMs())
+}
+
+function getPeriodBounds(kind, anchorDayMs) {
+	const anchor = startOfLocalDayMs(new Date(anchorDayMs))
+	if (kind === 'week') {
+		const startMs = startOfLocalWeekMs(new Date(anchor))
+		const endMs = startMs + 7 * DAY_MS
+		return {
+			startMs,
+			endMs,
+			rangeText: `${formatShortDate(startMs)} – ${formatShortDate(endMs - DAY_MS)}`,
+		}
+	}
+	if (kind === 'year') {
+		const y = new Date(anchor).getFullYear()
+		const startMs = startOfLocalDayMs(new Date(y, 0, 1))
+		const endMs = startOfLocalDayMs(new Date(y + 1, 0, 1))
+		return { startMs, endMs, rangeText: String(y) }
+	}
+	// month
+	const startMs = startOfLocalMonthMs(new Date(anchor))
+	const endMs = addMonthsMs(startMs, 1)
+	return { startMs, endMs, rangeText: formatMonthLabel(startMs) }
+}
+
+function shiftAnchor(kind, anchorDayMs, delta) {
+	const d = new Date(startOfLocalDayMs(new Date(anchorDayMs)))
+	if (kind === 'week') d.setDate(d.getDate() + delta * 7)
+	else if (kind === 'month') d.setMonth(d.getMonth() + delta)
+	else d.setFullYear(d.getFullYear() + delta)
+	return startOfLocalDayMs(d)
+}
+
+function buildPeriodSeries(kind, anchorDayMs) {
+	const { startMs, endMs, rangeText } = getPeriodBounds(kind, anchorDayMs)
+
+	/** @type {string[]} */
+	let labels = []
+	let buckets = 0
+
+	if (kind === 'week') {
+		buckets = 7
+		labels = new Array(7).fill(0).map((_, i) => formatShortDate(startMs + i * DAY_MS))
+	} else if (kind === 'year') {
+		buckets = 12
+		labels = new Array(12).fill(0).map((_, i) => new Date(2000, i, 1).toLocaleDateString(undefined, { month: 'short' }))
+	} else {
+		const d = new Date(startMs)
+		const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() || 30
+		buckets = daysInMonth
+		labels = new Array(daysInMonth).fill(0).map((_, i) => String(i + 1))
+	}
+
+	const income = new Array(buckets).fill(0)
+	const expenses = new Array(buckets).fill(0)
+	const savings = new Array(buckets).fill(0)
+
+	for (const e of ledgerEntries) {
+		const dayMs = Number(e?.dayMs)
+		if (!Number.isFinite(dayMs)) continue
+		if (dayMs < startMs || dayMs >= endMs) continue
+		let idx = 0
+		if (kind === 'year') {
+			idx = new Date(dayMs).getMonth()
+		} else {
+			idx = Math.floor((dayMs - startMs) / DAY_MS)
+		}
+		if (idx < 0 || idx >= buckets) continue
+		income[idx] += Math.max(0, Number(e?.incomeDollars) || 0)
+		expenses[idx] += Math.max(0, Number(e?.expensesDollars) || 0)
+		savings[idx] += Math.max(0, Number(e?.savingsDollars) || 0)
+	}
+
+	const totals = {
+		incomeDollars: income.reduce((a, b) => a + b, 0),
+		expensesDollars: expenses.reduce((a, b) => a + b, 0),
+		savingsDollars: savings.reduce((a, b) => a + b, 0),
+	}
+
+	return {
+		labels,
+		rangeText,
+		totals,
+		series: [
+			{ key: 'income', values: income },
+			{ key: 'expenses', values: expenses },
+			{ key: 'savings', values: savings },
+		],
+	}
+}
+
+function drawDetailChart(kind, canvas, tooltip, rangeOut) {
+	if (!canvas) return
+	const ctx = canvas.getContext('2d')
 	if (!ctx) return
 
-	const rect = chartCanvas.getBoundingClientRect()
+	const rect = canvas.getBoundingClientRect()
 	if (rect.width <= 0 || rect.height <= 0) return
 
 	const dpr = Math.max(1, window.devicePixelRatio || 1)
 	const width = Math.round(rect.width * dpr)
 	const height = Math.round(rect.height * dpr)
-	if (chartCanvas.width !== width) chartCanvas.width = width
-	if (chartCanvas.height !== height) chartCanvas.height = height
+	if (canvas.width !== width) canvas.width = width
+	if (canvas.height !== height) canvas.height = height
 
 	ctx.setTransform(1, 0, 0, 1, 0, 0)
 	ctx.scale(dpr, dpr)
@@ -775,16 +1308,6 @@ function drawSavingsChart() {
 	const w = rect.width
 	const h = rect.height
 	ctx.clearRect(0, 0, w, h)
-
-	const goalUnits = Number(range.value)
-	const goalDollars = goalUnits * DOLLARS_PER_UNIT
-	const log = getPreviewLog()
-	const points = []
-
-	const start = log.length > 0 ? log[0].month : startOfLocalMonthMs(new Date())
-	const end = addYearsMs(start, PROGRAM_YEARS)
-	const maxLogged = log.reduce((m, p) => Math.max(m, p.dollars), 0)
-	const yMax = Math.max(1, goalDollars, maxLogged)
 
 	const padL = 44
 	const padR = 14
@@ -798,20 +1321,27 @@ function drawSavingsChart() {
 	const axis = rootStyle.getPropertyValue('--border').trim() || 'rgba(15, 23, 42, 0.22)'
 	const text = rootStyle.getPropertyValue('--text').trim() || 'rgba(15, 23, 42, 0.65)'
 	const textH = rootStyle.getPropertyValue('--text-h').trim() || 'rgba(15, 23, 42, 0.85)'
-	const goalLine = axis
 
-	const xFor = (t) => {
-		const pct = (t - start) / (end - start)
-		return padL + clamp(pct, 0, 1) * plotW
-	}
+	const { labels, series, rangeText } = buildPeriodSeries(kind, detailAnchorDayMs)
+	if (rangeOut) rangeOut.textContent = rangeText
+
+	const allValues = []
+	for (const s of series) for (const v of s.values) allValues.push(Number(v) || 0)
+	const minV = Math.min(0, ...allValues)
+	const maxV = Math.max(0, ...allValues)
+	const span = Math.max(1, maxV - minV)
+
 	const yFor = (v) => {
-		const pct = v / yMax
+		const pct = (v - minV) / span
 		return padT + (1 - clamp(pct, 0, 1)) * plotH
 	}
-
-	for (const p of log) {
-		points.push({ month: p.month, dollars: p.dollars, x: xFor(p.month), y: yFor(p.dollars) })
+	const xForIndex = (i) => {
+		const pct = labels.length <= 1 ? 0 : i / (labels.length - 1)
+		return padL + clamp(pct, 0, 1) * plotW
 	}
+
+	/** @type {number[]} */
+	const x = labels.map((_, i) => xForIndex(i))
 
 	// Axes
 	ctx.strokeStyle = axis
@@ -822,26 +1352,40 @@ function drawSavingsChart() {
 	ctx.lineTo(padL + plotW, padT + plotH)
 	ctx.stroke()
 
-	// Goal line (dashed)
-	if (goalDollars > 0) {
-		const yGoal = yFor(goalDollars)
-		ctx.save()
-		ctx.globalAlpha = 0.7
-		ctx.setLineDash([6, 6])
-		ctx.strokeStyle = goalLine
-		ctx.beginPath()
-		ctx.moveTo(padL, yGoal)
-		ctx.lineTo(padL + plotW, yGoal)
-		ctx.stroke()
-		ctx.restore()
+	// Zero line
+	const y0 = yFor(0)
+	ctx.save()
+	ctx.globalAlpha = 0.45
+	ctx.setLineDash([6, 6])
+	ctx.beginPath()
+	ctx.moveTo(padL, y0)
+	ctx.lineTo(padL + plotW, y0)
+	ctx.stroke()
+	ctx.restore()
+
+	// Series styles
+	/** @type {Record<string, { stroke: string, dash: number[], alpha: number, width: number }>} */
+	const styleByKey = {
+		income: { stroke: textH, dash: [6, 6], alpha: 0.9, width: 2 },
+		expenses: { stroke: text, dash: [2, 6], alpha: 0.9, width: 2 },
+		savings: { stroke: accent, dash: [], alpha: 1, width: 2.5 },
 	}
 
-	// Savings line
-	if (points.length >= 1) {
-		ctx.strokeStyle = accent
-		ctx.lineWidth = 2
+	/** @type {Array<{ key: string, values: number[], points: Array<{ x: number, y: number, v: number }> }>} */
+	const seriesWithPoints = []
+	for (const s of series) {
+		const values = s.values.map((v) => Number(v) || 0)
+		const points = values.map((v, i) => ({ x: x[i], y: yFor(v), v }))
+		seriesWithPoints.push({ key: s.key, values, points })
+
+		const st = styleByKey[s.key] || styleByKey.savings
+		ctx.save()
+		ctx.globalAlpha = st.alpha
+		ctx.strokeStyle = st.stroke
+		ctx.lineWidth = st.width
 		ctx.lineJoin = 'round'
 		ctx.lineCap = 'round'
+		ctx.setLineDash(st.dash)
 		ctx.beginPath()
 		for (let i = 0; i < points.length; i++) {
 			const p = points[i]
@@ -849,165 +1393,143 @@ function drawSavingsChart() {
 			else ctx.lineTo(p.x, p.y)
 		}
 		ctx.stroke()
-
-		// Latest point marker
-		const last = points[points.length - 1]
-		ctx.fillStyle = accent
-		ctx.beginPath()
-		ctx.arc(last.x, last.y, 3.5, 0, Math.PI * 2)
-		ctx.fill()
+		ctx.restore()
 	}
 
-	// Labels (start/end) as M/YY
+	// X ticks (keep it sparse)
 	ctx.fillStyle = text
 	ctx.font = '12px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif'
 	ctx.textBaseline = 'alphabetic'
 	const baselineY = padT + plotH
-
-	// Yearly tick marks across the 4-year program.
-	const tickMonths = [0, 12, 24, 36, 48]
-	for (const m of tickMonths) {
-		const t = addMonthsMs(start, m)
-		const x = xFor(t)
-
-		// subtle vertical guide line
-		if (m !== 0 && m !== 48) {
-			ctx.save()
-			ctx.globalAlpha = 0.35
-			ctx.strokeStyle = axis
-			ctx.lineWidth = 1
-			ctx.beginPath()
-			ctx.moveTo(x, padT)
-			ctx.lineTo(x, baselineY)
-			ctx.stroke()
-			ctx.restore()
-		}
-
-		// tick mark
+	const maxTicks = 6
+	const step = Math.max(1, Math.ceil(labels.length / maxTicks))
+	for (let i = 0; i < labels.length; i += step) {
+		const xi = x[i]
 		ctx.strokeStyle = axis
 		ctx.lineWidth = 1
 		ctx.beginPath()
-		ctx.moveTo(x, baselineY)
-		ctx.lineTo(x, baselineY + 5)
+		ctx.moveTo(xi, baselineY)
+		ctx.lineTo(xi, baselineY + 5)
 		ctx.stroke()
 
-		// label
-		if (m === 0) ctx.textAlign = 'left'
-		else if (m === 48) ctx.textAlign = 'right'
-		else ctx.textAlign = 'center'
-		ctx.fillStyle = text
-		ctx.fillText(formatMonthLabel(t), x, baselineY + 18)
+		ctx.textAlign = i === 0 ? 'left' : (i + step >= labels.length ? 'right' : 'center')
+		ctx.fillText(labels[i], xi, baselineY + 18)
 	}
 
-	// Minimal Y labels (0 and goal)
+	// Y labels (min/0/max)
 	ctx.textAlign = 'right'
 	ctx.fillStyle = text
-	ctx.fillText('$0', padL - 8, padT + plotH)
-	if (goalDollars > 0) {
-		ctx.fillStyle = textH
-		ctx.fillText(formatDollars(goalDollars), padL - 8, yFor(goalDollars) + 4)
-	}
+	ctx.fillText(formatSignedDollars(minV), padL - 8, yFor(minV) + 4)
+	ctx.fillStyle = textH
+	ctx.fillText('$0', padL - 8, y0 + 4)
+	ctx.fillStyle = text
+	ctx.fillText(formatSignedDollars(maxV), padL - 8, yFor(maxV) + 4)
 
-	chartState = {
+	detailChartState = {
 		canvasW: w,
 		canvasH: h,
-		start,
-		end,
 		padL,
 		padT,
 		plotW,
 		plotH,
-		yMax,
-		log,
-		points,
+		labels,
+		x,
+		series: seriesWithPoints,
 	}
 }
 
-function hideChartTooltip() {
-	if (!chartTooltip) return
-	chartTooltip.hidden = true
-	lastTooltipText = ''
+function hideDetailTooltip(tooltip) {
+	if (!tooltip) return
+	tooltip.hidden = true
 }
 
-function dollarsForTimeMs(t) {
-	if (!chartState) return 0
-	const log = chartState.log
-	if (log.length === 0) return 0
-	if (log.length === 1) return log[0].dollars
-
-	if (t <= log[0].month) return log[0].dollars
-	if (t >= log[log.length - 1].month) return log[log.length - 1].dollars
-
-	let hi = 1
-	while (hi < log.length && log[hi].month < t) hi++
-	const lo = Math.max(0, hi - 1)
-	const a = log[lo]
-	const b = log[Math.min(hi, log.length - 1)]
-	if (a.month === b.month) return b.dollars
-	const pct = (t - a.month) / (b.month - a.month)
-	return a.dollars + pct * (b.dollars - a.dollars)
-}
-
-function onChartPointerMove(e) {
-	if (!chartTooltip) return
-	if (!chartState || chartState.points.length === 0) {
-		hideChartTooltip()
+function onDetailPointerMove(canvas, tooltip, e) {
+	if (!canvas || !tooltip) return
+	const state = detailChartState
+	if (!state || state.labels.length === 0) {
+		hideDetailTooltip(tooltip)
 		return
 	}
 
-	const r = chartCanvas.getBoundingClientRect()
+	const r = canvas.getBoundingClientRect()
 	const x = e.clientX - r.left
 	const y = e.clientY - r.top
 	if (x < 0 || y < 0 || x > r.width || y > r.height) {
-		hideChartTooltip()
+		hideDetailTooltip(tooltip)
 		return
 	}
 
-	const xClamped = clamp(x, chartState.padL, chartState.padL + chartState.plotW)
-	const t = chartState.start + ((xClamped - chartState.padL) / chartState.plotW) * (chartState.end - chartState.start)
-	const dollars = dollarsForTimeMs(t)
-	const yAt = chartState.padT + (1 - clamp(dollars / chartState.yMax, 0, 1)) * chartState.plotH
-
-	const labelMonth = startOfLocalMonthMs(new Date(t))
-	const nextText = `${formatMonthLabel(labelMonth)} — ${formatDollars(dollars)}`
-	if (nextText !== lastTooltipText) {
-		chartTooltip.textContent = nextText
-		lastTooltipText = nextText
+	let bestI = 0
+	let bestDist = Infinity
+	for (let i = 0; i < state.x.length; i++) {
+		const d = Math.abs(state.x[i] - x)
+		if (d < bestDist) {
+			bestDist = d
+			bestI = i
+		}
 	}
 
-	chartTooltip.hidden = false
-	const canvasLeft = chartCanvas.offsetLeft
-	const canvasTop = chartCanvas.offsetTop
+	const label = state.labels[bestI] || ''
+	const income = state.series.find((s) => s.key === 'income')?.values[bestI] ?? 0
+	const expenses = state.series.find((s) => s.key === 'expenses')?.values[bestI] ?? 0
+	const savings = state.series.find((s) => s.key === 'savings')?.values[bestI] ?? 0
+	tooltip.textContent = `${label} — Income ${formatDollars(income)} · Expenses ${formatDollars(expenses)} · Savings ${formatDollars(savings)}`
 
-	// Place the tooltip anchored to the hovered X and interpolated Y.
-	const tipW = chartTooltip.offsetWidth || 0
-	const anchorLeft = canvasLeft + xClamped
-	const anchorTop = canvasTop + yAt
+	// Anchor tooltip near the savings point.
+	const savingsPoint = state.series.find((s) => s.key === 'savings')?.points[bestI]
+	const anchorX = savingsPoint ? savingsPoint.x : state.x[bestI]
+	const anchorY = savingsPoint ? savingsPoint.y : (state.padT + state.plotH / 2)
+
+	tooltip.hidden = false
+	const canvasLeft = canvas.offsetLeft
+	const canvasTop = canvas.offsetTop
+	const tipW = tooltip.offsetWidth || 0
+	const left = canvasLeft + anchorX
+	const top = canvasTop + anchorY
 	const minLeft = canvasLeft + tipW / 2 + 6
-	const maxLeft = canvasLeft + chartState.canvasW - tipW / 2 - 6
-	const clampedLeft = tipW > 0 ? clamp(anchorLeft, minLeft, maxLeft) : anchorLeft
-	chartTooltip.style.left = `${clampedLeft}px`
-	chartTooltip.style.top = `${anchorTop}px`
+	const maxLeft = canvasLeft + state.canvasW - tipW / 2 - 6
+	const clampedLeft = tipW > 0 ? clamp(left, minLeft, maxLeft) : left
+	tooltip.style.left = `${clampedLeft}px`
+	tooltip.style.top = `${top}px`
 
-	const tipH = chartTooltip.offsetHeight || 0
-	chartTooltip.classList.toggle('chart-tooltip--bottom', yAt < tipH + 18)
+	const tipH = tooltip.offsetHeight || 0
+	tooltip.classList.toggle('chart-tooltip--bottom', anchorY < tipH + 18)
+}
+
+function updateDetailsTotals() {
+	if (!detailIncomeTotalOut || !detailExpensesTotalOut || !detailSavingsTotalOut) return
+	if (!session) {
+		detailIncomeTotalOut.textContent = '$0'
+		detailExpensesTotalOut.textContent = '$0'
+		detailSavingsTotalOut.textContent = '$0'
+		return
+	}
+	const { totals } = buildPeriodSeries(detailKind, detailAnchorDayMs)
+	detailIncomeTotalOut.textContent = formatDollars(totals.incomeDollars)
+	detailExpensesTotalOut.textContent = formatDollars(totals.expensesDollars)
+	detailSavingsTotalOut.textContent = formatDollars(totals.savingsDollars)
+}
+
+function drawDetails() {
+	if (!detailChartCanvas) return
+	if (!session) {
+		detailChartState = null
+		return
+	}
+	if (detailKindSelect) detailKindSelect.value = detailKind
+	const iso = isoDateValue(detailAnchorDayMs)
+	if (detailDateInput) detailDateInput.value = iso
+	if (entryDateInput && document.activeElement !== entryDateInput) entryDateInput.value = iso
+	drawDetailChart(detailKind, detailChartCanvas, detailTooltip, detailRange)
+	updateDetailsTotals()
 }
 
 function updateProgress() {
 	const goalUnits = Number(range.value)
 	const goalDollars = goalUnits * DOLLARS_PER_UNIT
-	const currentDollars = parseMoneyInput(currentSavingsInput.value)
-
-	currentSavingsOut.textContent = formatDollars(currentDollars)
-
-	const pct = goalDollars > 0 ? clamp(currentDollars / goalDollars, 0, 1) : 0
-	const pctText = `${Math.round(pct * 100)}%`
-	chartPct.textContent = pctText
-
-	const remaining = Math.max(0, goalDollars - currentDollars)
-	chartRemaining.textContent = `Remaining: ${formatDollars(remaining)}`
-
-	drawSavingsChart()
+	const currentDollars = getCurrentSavingsForGoalProgress()
+	updateDashboardSummary({ goalDollars, currentDollars })
+	if (normalizeRoute(location.hash) === 'details') drawDetails()
 }
 
 function onInput() {
@@ -1029,31 +1551,6 @@ function onInput() {
 
 range.addEventListener('input', onInput)
 
-let logTimer = null
-currentSavingsInput.addEventListener('input', () => {
-	updateProgress()
-	if (logTimer) window.clearTimeout(logTimer)
-	logTimer = window.setTimeout(() => {
-		const thisMonth = startOfLocalMonthMs(new Date())
-		const dollars = parseMoneyInput(currentSavingsInput.value)
-		void persistSavingsForMonth(thisMonth, dollars)
-		lastSaved.textContent = `Last saved: ${formatMonthLabel(thisMonth)}`
-		drawSavingsChart()
-	}, 600)
-})
-
-currentSavingsInput.addEventListener('keydown', (e) => {
-	if (e.key === 'Enter') currentSavingsInput.blur()
-})
-
-currentSavingsInput.addEventListener('change', () => {
-	const thisMonth = startOfLocalMonthMs(new Date())
-	const dollars = parseMoneyInput(currentSavingsInput.value)
-	void persistSavingsForMonth(thisMonth, dollars)
-	lastSaved.textContent = `Last saved: ${formatMonthLabel(thisMonth)}`
-	updateProgress()
-})
-
 authForm?.addEventListener('submit', async (e) => {
 	e.preventDefault()
 	showAuthError('')
@@ -1074,18 +1571,21 @@ authForm?.addEventListener('submit', async (e) => {
 		}
 
 		// Clear previous values immediately (prevents old account values lingering).
-		resetSavingsUi({ message: 'Not saved yet' })
 		resetGoalUi({ persistLocal: !isDesktopApp })
+		didWarnDesktopGoalSync = false
 
 		authPassword.value = ''
 		updateAuthUi()
 		if (isDesktopApp) {
-			await loadSavingsFromDbOrMigrate()
 			await loadGoalFromDbOrMigrate()
+			await loadLedgerEntriesFromStorage()
+			void syncLedgerWithCloud()
 		} else {
-			await loadSavingsFromCloudOrFallback()
 			await loadGoalFromCloudOrFallback()
+			await loadLedgerEntriesFromStorage()
+			void syncLedgerWithCloud()
 		}
+		updateProgress()
 	} catch (err) {
 		showAuthError(err?.message ? String(err.message) : 'Login failed')
 	} finally {
@@ -1111,18 +1611,21 @@ registerBtn?.addEventListener('click', async () => {
 			saveWebSessionToStorage(session)
 		}
 
-		resetSavingsUi({ message: 'Not saved yet' })
 		resetGoalUi({ persistLocal: !isDesktopApp })
+		didWarnDesktopGoalSync = false
 
 		authPassword.value = ''
 		updateAuthUi()
 		if (isDesktopApp) {
-			await loadSavingsFromDbOrMigrate()
 			await loadGoalFromDbOrMigrate()
+			await loadLedgerEntriesFromStorage()
+			void syncLedgerWithCloud()
 		} else {
-			await loadSavingsFromCloudOrFallback()
 			await loadGoalFromCloudOrFallback()
+			await loadLedgerEntriesFromStorage()
+			void syncLedgerWithCloud()
 		}
+		updateProgress()
 	} catch (err) {
 		showAuthError(err?.message ? String(err.message) : 'Registration failed')
 	} finally {
@@ -1137,13 +1640,19 @@ logoutBtn?.addEventListener('click', async () => {
 		if (isDesktopApp) {
 			await desktop.auth.logout()
 			session = null
-			resetSavingsUi({ message: 'Log in to save' })
+			ledgerEntries = []
 			resetGoalUi({ persistLocal: false })
+			didWarnDesktopGoalSync = false
 		} else {
 			session = null
+			ledgerEntries = []
 			saveWebSessionToStorage(null)
-			resetSavingsUi({ message: 'Not saved yet' })
 			resetGoalUi({ persistLocal: true })
+		}
+		try {
+			saveLedgerCloudSyncState({ pendingClientIds: [], lastPullMs: 0 })
+		} catch {
+			// ignore
 		}
 		updateAuthUi()
 		updateProgress()
@@ -1156,13 +1665,71 @@ logoutBtn?.addEventListener('click', async () => {
 
 window.addEventListener('resize', () => {
 	layoutRocket()
-	drawSavingsChart()
+	if (normalizeRoute(location.hash) === 'details') drawDetails()
 })
 
-chartCanvas.addEventListener('pointermove', onChartPointerMove)
-chartCanvas.addEventListener('pointerleave', hideChartTooltip)
+detailChartCanvas?.addEventListener('pointermove', (e) => onDetailPointerMove(detailChartCanvas, detailTooltip, e))
+detailChartCanvas?.addEventListener('pointerleave', () => hideDetailTooltip(detailTooltip))
+
+detailKindSelect?.addEventListener('change', () => {
+	const next = String(detailKindSelect.value || '').trim().toLowerCase()
+	if (next === 'month' || next === 'year' || next === 'week') {
+		detailKind = next
+	}
+	drawDetails()
+})
+
+detailDateInput?.addEventListener('change', () => {
+	detailAnchorDayMs = parseDateInputToDayMs(detailDateInput.value)
+	drawDetails()
+})
+
+detailPrevBtn?.addEventListener('click', () => {
+	detailAnchorDayMs = shiftAnchor(detailKind, detailAnchorDayMs, -1)
+	drawDetails()
+})
+
+detailNextBtn?.addEventListener('click', () => {
+	detailAnchorDayMs = shiftAnchor(detailKind, detailAnchorDayMs, 1)
+	drawDetails()
+})
+
+function showEntryError(msg) {
+	if (!entryError) return
+	const text = String(msg || '').trim()
+	entryError.textContent = text
+	entryError.hidden = !text
+}
+
+entryForm?.addEventListener('submit', async (e) => {
+	e.preventDefault()
+	showEntryError('')
+	if (!session) {
+		showEntryError('Log in to add entries')
+		return
+	}
+	try {
+		if (entryAddBtn) entryAddBtn.disabled = true
+		const dayMs = parseDateInputToDayMs(entryDateInput?.value)
+		const income = parseMoneyInput(entryIncomeInput?.value)
+		const expenses = parseMoneyInput(entryExpensesInput?.value)
+		const savings = parseMoneyInput(entrySavingsInput?.value)
+		await addLedgerEntry({ dayMs, incomeDollars: income, expensesDollars: expenses, savingsDollars: savings })
+		if (entryIncomeInput) entryIncomeInput.value = '0'
+		if (entryExpensesInput) entryExpensesInput.value = '0'
+		if (entrySavingsInput) entrySavingsInput.value = '0'
+		updateProgress()
+		drawDetails()
+	} catch (err) {
+		showEntryError(err?.message ? String(err.message) : 'Failed to add entry')
+	} finally {
+		if (entryAddBtn) entryAddBtn.disabled = false
+	}
+})
 
 // Initial layout after first paint (ensures we can measure sizes).
 requestAnimationFrame(() => {
 	onInput()
+	if (detailDateInput) detailDateInput.value = isoDateValue(detailAnchorDayMs)
+	if (entryDateInput) entryDateInput.value = isoDateValue(detailAnchorDayMs)
 })

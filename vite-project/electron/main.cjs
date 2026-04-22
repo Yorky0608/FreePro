@@ -214,7 +214,14 @@ async function cloudPullGoalAndMerge({ token, localUserId }) {
 function setupIpc() {
   ipcMain.handle('auth:getSession', async (event) => {
     const s = getSessionFromEvent(event)
-    return s ? { id: s.id, email: s.email } : null
+    return s
+      ? {
+          id: s.id,
+          email: s.email,
+          token: s.cloudToken,
+          cloudUserId: s.cloudUserId,
+        }
+      : null
   })
 
   ipcMain.handle('auth:logout', async (event) => {
@@ -283,7 +290,13 @@ function setupIpc() {
       }
     }
 
-    return { id: user.id, email: user.email }
+    const sessionRecord = Number.isFinite(wcId) ? sessionByWebContentsId.get(wcId) : null
+    return {
+      id: user.id,
+      email: user.email,
+      token: sessionRecord?.cloudToken,
+      cloudUserId: sessionRecord?.cloudUserId,
+    }
   })
 
   ipcMain.handle('auth:login', async (event, payload) => {
@@ -345,7 +358,13 @@ function setupIpc() {
       }
     }
 
-    return { id: localUser.id, email: localUser.email }
+    const sessionRecord = Number.isFinite(wcId) ? sessionByWebContentsId.get(wcId) : null
+    return {
+      id: localUser.id,
+      email: localUser.email,
+      token: sessionRecord?.cloudToken,
+      cloudUserId: sessionRecord?.cloudUserId,
+    }
   })
 
   ipcMain.handle('savings:getLog', async (event) => {
@@ -450,6 +469,23 @@ function setupIpc() {
     }
 
     return true
+  })
+
+  ipcMain.handle('ledger:listEntries', async (event) => {
+    const session = requireSession(event)
+    return db.listLedgerEntries(session.id)
+  })
+
+  ipcMain.handle('ledger:addEntry', async (event, payload) => {
+    const session = requireSession(event)
+    const clientId = typeof payload?.clientId === 'string' ? payload.clientId : undefined
+    const dayMs = Number(payload?.dayMs)
+    const incomeDollars = Number(payload?.incomeDollars)
+    const expensesDollars = Number(payload?.expensesDollars)
+    const savingsDollars = Number(payload?.savingsDollars)
+    const createdAtMs = Number(payload?.createdAtMs)
+    const updatedAtMs = Number(payload?.updatedAtMs)
+    return db.addLedgerEntry({ userId: session.id, clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs })
   })
 }
 

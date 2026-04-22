@@ -50,6 +50,24 @@ To point the web build at a different API base URL, set:
 
 - `VITE_API_BASE_URL` (example: `https://your-api.example.com`)
 
+## Cloud API (AWS) notes
+
+If your API Gateway routes point at a Lambda, that Lambda must have the required environment variables set.
+If they are missing, endpoints like `POST /auth/login` will return `500 {"message":"Internal Server Error"}` and the desktop app will show `cloud sync OFF`.
+
+Required Lambda env vars:
+
+- `USERS_TABLE` — DynamoDB table name for users
+- `SAVINGS_TABLE` — DynamoDB table name for savings/month log
+- `LEDGER_TABLE` — DynamoDB table name for ledger entries
+- `JWT_SECRET` — secret used to sign/verify JWTs (keep this stable, or existing tokens become invalid)
+
+Quick verification (should return `401` for bad creds, not `500`):
+
+```bash
+node -e "fetch('https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'debug@example.com',password:'notreal'})}).then(async r=>{console.log('status',r.status); console.log('body', (await r.text()).slice(0,200));}).catch(e=>{console.error(e); process.exit(1);});"
+```
+
 ## Run as a desktop app (Electron)
 
 This runs Vite and Electron together (Electron opens a desktop window pointing at the Vite dev server):

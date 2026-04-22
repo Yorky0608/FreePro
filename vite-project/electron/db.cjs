@@ -61,8 +61,40 @@ function migrate() {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);
 
+		CREATE TABLE IF NOT EXISTS ledger_entries (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			client_id TEXT,
+			day_ms INTEGER NOT NULL,
+			income_dollars INTEGER NOT NULL DEFAULT 0,
+			expenses_dollars INTEGER NOT NULL DEFAULT 0,
+			savings_dollars INTEGER NOT NULL DEFAULT 0,
+			created_at_ms INTEGER NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_savings_user_month ON savings(user_id, month_ms);
+		CREATE INDEX IF NOT EXISTS idx_ledger_user_day ON ledger_entries(user_id, day_ms);
 	`)
+
+	// Backfill/migrate existing installs that created ledger_entries before client_id existed.
+	try {
+		const info = getAll('PRAGMA table_info(ledger_entries)')
+		const cols = new Set(info.map((r) => String(r.name)))
+		if (!cols.has('client_id')) {
+			run('ALTER TABLE ledger_entries ADD COLUMN client_id TEXT')
+		}
+	} catch {
+		// ignore
+	}
+
+	// Ensure uniqueness per-user for de-duping cloud sync.
+	try {
+		run('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_user_client ON ledger_entries(user_id, client_id)')
+	} catch {
+		// ignore
+	}
 }
 
 function getOne(sql, params = []) {
@@ -266,6 +298,77 @@ function upsertUserGoalFromCloud({ userId, goalDollars, createdAtMs, updatedAtMs
 	return true
 }
 
+function listLedgerEntries(userId) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	const rows = getAll(
+		"SELECT id, COALESCE(client_id, 'legacy-' || id) AS client_id, day_ms, income_dollars, expenses_dollars, savings_dollars FROM ledger_entries WHERE user_id = ? ORDER BY day_ms ASC, id ASC",
+		[userId]
+	)
+	return rows.map((r) => ({
+		id: Number(r.id),
+		clientId: String(r.client_id),
+		dayMs: Number(r.day_ms),
+		incomeDollars: Number(r.income_dollars),
+		expensesDollars: Number(r.expenses_dollars),
+		savingsDollars: Number(r.savings_dollars),
+	}))
+}
+
+function addLedgerEntry({ userId, clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (!Number.isFinite(dayMs) || dayMs <= 0) throw new Error('Invalid day')
+	const income = Number(incomeDollars)
+	const expenses = Number(expensesDollars)
+	const savings = Number(savingsDollars)
+	if (!Number.isFinite(income) || income < 0) throw new Error('Invalid income')
+	if (!Number.isFinite(expenses) || expenses < 0) throw new Error('Invalid expenses')
+	if (!Number.isFinite(savings) || savings < 0) throw new Error('Invalid savings')
+	const safeClientId = typeof clientId === 'string' ? clientId.trim() : ''
+
+	const now = Date.now()
+	const safeUpdated = Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? Math.round(updatedAtMs) : now
+	const safeCreated = Number.isFinite(createdAtMs) && createdAtMs > 0 ? Math.round(createdAtMs) : safeUpdated
+
+	if (safeClientId) {
+		run(
+			`INSERT INTO ledger_entries (user_id, client_id, day_ms, income_dollars, expenses_dollars, savings_dollars, created_at_ms, updated_at_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(user_id, client_id)
+			 DO UPDATE SET day_ms = excluded.day_ms, income_dollars = excluded.income_dollars, expenses_dollars = excluded.expenses_dollars, savings_dollars = excluded.savings_dollars, updated_at_ms = excluded.updated_at_ms`,
+			[
+				userId,
+				safeClientId,
+				Math.round(dayMs),
+				Math.round(income),
+				Math.round(expenses),
+				Math.round(savings),
+				safeCreated,
+				safeUpdated,
+			]
+		)
+		persist()
+		const row = getOne('SELECT id FROM ledger_entries WHERE user_id = ? AND client_id = ? LIMIT 1', [userId, safeClientId])
+		return { id: row ? Number(row.id) : 0 }
+	}
+
+	run(
+		`INSERT INTO ledger_entries (user_id, day_ms, income_dollars, expenses_dollars, savings_dollars, created_at_ms, updated_at_ms)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		[
+			userId,
+			Math.round(dayMs),
+			Math.round(income),
+			Math.round(expenses),
+			Math.round(savings),
+			safeCreated,
+			safeUpdated,
+		]
+	)
+	persist()
+	const row = getOne('SELECT id FROM ledger_entries WHERE user_id = ? ORDER BY id DESC LIMIT 1', [userId])
+	return { id: row ? Number(row.id) : 0 }
+}
+
 module.exports = {
 	initDb,
 	createUser,
@@ -278,5 +381,7 @@ module.exports = {
 	getUserGoalMeta,
 	upsertUserGoal,
 	upsertUserGoalFromCloud,
+	listLedgerEntries,
+	addLedgerEntry,
 	normalizeEmail,
 }

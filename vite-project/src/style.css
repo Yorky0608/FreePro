@@ -58,10 +58,35 @@ body {
 /* Freedom Program-ish layout */
 .shell {
   min-height: 100svh;
+  position: relative;
+  isolation: isolate;
+}
+
+/* Full-page background gradient (formerly hero-only) */
+.shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(1200px 700px at 65% 30%, rgba(255, 236, 210, 0.55), transparent 60%),
+    radial-gradient(900px 600px at 20% 45%, rgba(255, 186, 140, 0.35), transparent 58%),
+    linear-gradient(180deg, rgba(70, 70, 70, 0.55), rgba(40, 40, 40, 0.62));
+}
+
+.shell::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(1000px 520px at 50% 100%, rgba(0, 0, 0, 0.55), transparent 70%);
+  pointer-events: none;
 }
 
 .topbar {
-  background: var(--bg);
+	background: var(--surface-2);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
 
@@ -79,8 +104,9 @@ body {
 .topbar-brand {
   font-family: var(--heading);
   font-size: 18px;
-  color: var(--text);
+  color: var(--text-h);
   letter-spacing: 0.2px;
+	font-weight: 600;
 }
 
 .progress {
@@ -217,13 +243,20 @@ body {
 }
 
 .topbar-link {
-  color: var(--text);
+  color: var(--text-h);
   text-decoration: none;
   font-size: 14px;
+  font-weight: 600;
+  opacity: 0.82;
 }
 
 .topbar-link:hover {
-  color: var(--text-h);
+  opacity: 1;
+}
+
+.topbar-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 
 .topbar-cta {
@@ -246,42 +279,20 @@ body {
 .hero {
   position: relative;
   color: #fff;
-  min-height: 520px;
+	min-height: clamp(420px, 68vh, 560px);
   display: grid;
   place-items: center;
   overflow: hidden;
 }
 
-/* Use gradients to evoke the photo without copying it */
-.hero::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(1200px 700px at 65% 30%, rgba(255, 236, 210, 0.55), transparent 60%),
-    radial-gradient(900px 600px at 20% 45%, rgba(255, 186, 140, 0.35), transparent 58%),
-    linear-gradient(180deg, rgba(70, 70, 70, 0.55), rgba(40, 40, 40, 0.62));
-  transform: scale(1.02);
-}
-
-.hero::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(1000px 520px at 50% 100%, rgba(0, 0, 0, 0.55), transparent 70%);
-  pointer-events: none;
-}
-
 .hero-inner {
   position: relative;
   width: min(1120px, 100%);
-  padding: 56px 20px;
+	padding: 44px 20px;
   box-sizing: border-box;
-  display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  align-items: center;
-  gap: 24px;
+	display: grid;
+	place-items: center;
+	text-align: center;
 }
 
 .hero-stat {
@@ -301,10 +312,11 @@ body {
   color: rgba(255, 255, 255, 0.92);
 }
 
-.hero-right {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
+
+.hero-brand {
+	display: grid;
+	justify-items: center;
+	gap: 14px;
 }
 
 .hero-wordmark {
@@ -315,10 +327,18 @@ body {
   color: #fff;
 }
 
+.hero-logo {
+  width: clamp(100px, 28vw, 800px);
+  height: auto;
+  max-height: clamp(100px, 28vw, 800px);
+	object-fit: contain;
+	display: block;
+}
+
 .mark {
   position: relative;
-  width: 160px;
-  height: 160px;
+  width: clamp(140px, 28vw, 400px);
+  height: clamp(140px, 28vw, 400px);
 }
 
 .mark-rays {
@@ -394,6 +414,17 @@ body {
   background: var(--surface-2);
   color: var(--text-h);
   font-size: 0.95rem;
+	color-scheme: light dark;
+}
+
+select.auth-input {
+	background-color: var(--surface-2);
+	color: var(--text-h);
+}
+
+select.auth-input option {
+	background-color: var(--bg);
+	color: var(--text-h);
 }
 
 .auth-input:focus-visible {
@@ -439,6 +470,113 @@ body {
   border-radius: 12px;
   padding: 8px 10px;
   font-size: 0.85rem;
+}
+
+.dashboard-gate {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.summary {
+  margin: 0 0 14px;
+}
+
+.details-toolbar {
+  margin: 0 0 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.details-nav {
+  display: flex;
+  gap: 10px;
+}
+
+.details-entry {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px dashed var(--border);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+@media (max-width: 900px) {
+  .details-entry {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric {
+  padding: 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.metric-label {
+  font-size: 0.8rem;
+  color: var(--text);
+}
+
+.metric-value {
+  margin-top: 6px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+  color: var(--text-h);
+  font-size: 1.15rem;
+}
+
+.bar {
+  margin-top: 0.75rem;
+}
+
+.bar-track {
+  height: 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+}
+
+.bar-meta {
+  margin-top: 0.45rem;
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+@media (max-width: 920px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 920px) {
@@ -582,11 +720,7 @@ body {
     justify-self: center;
   }
   .hero-inner {
-    grid-template-columns: 1fr;
-    text-align: left;
-  }
-  .hero-right {
-    justify-items: start;
+		text-align: center;
   }
   .panel {
     margin: 16px auto 56px;
