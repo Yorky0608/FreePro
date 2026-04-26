@@ -73,11 +73,11 @@ Recommended shape for a user item:
 
 ```json
 {
-	"userId": "uuid-or-cognito-sub",
-	"email": "person@example.com",
-	"name": "Person Name",
-	"passwordHash": "...",
-	"createdAtMs": 1714090000000
+  "userId": "uuid-or-cognito-sub",
+  "email": "person@example.com",
+  "name": "Person Name",
+  "passwordHash": "...",
+  "createdAtMs": 1714090000000
 }
 ```
 
@@ -98,21 +98,26 @@ For the in-app name editor added in the dashboard, expose one more authenticated
 Example Lambda handler shape:
 
 ```js
-if (event.httpMethod === 'POST' && event.path === '/profile/name') {
-	const token = event.headers.authorization?.replace(/^Bearer\s+/i, '') || ''
-	const claims = verifyJwt(token)
-	const body = JSON.parse(event.body || '{}')
-	const name = String(body.name || '').trim().replace(/\s+/g, ' ').slice(0, 120)
+if (event.httpMethod === "POST" && event.path === "/profile/name") {
+  const token = event.headers.authorization?.replace(/^Bearer\s+/i, "") || "";
+  const claims = verifyJwt(token);
+  const body = JSON.parse(event.body || "{}");
+  const name = String(body.name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 120);
 
-	await dynamo.update({
-		TableName: process.env.USERS_TABLE,
-		Key: { userId: claims.userId },
-		UpdateExpression: 'SET #name = :name',
-		ExpressionAttributeNames: { '#name': 'name' },
-		ExpressionAttributeValues: { ':name': name || null },
-	}).promise()
+  await dynamo
+    .update({
+      TableName: process.env.USERS_TABLE,
+      Key: { userId: claims.userId },
+      UpdateExpression: "SET #name = :name",
+      ExpressionAttributeNames: { "#name": "name" },
+      ExpressionAttributeValues: { ":name": name || null },
+    })
+    .promise();
 
-	return json(200, { name })
+  return json(200, { name });
 }
 ```
 
