@@ -101,6 +101,10 @@ body {
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 .topbar-brand {
   font-family: var(--heading);
   font-size: 18px;
@@ -390,10 +394,80 @@ body {
   color: var(--text-h);
 }
 
+.auth-mode {
+  display: inline-flex;
+  gap: 8px;
+  padding: 4px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.auth-mode-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-mode-btn--active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.auth-hint {
+  margin: 0 0 12px;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
 .auth-form {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px 12px;
+}
+
+.auth-profile-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.auth-profile-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.auth-profile-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.auth-profile-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.auth-profile {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px 12px;
+  margin-bottom: 12px;
 }
 
 .auth-form.auth-form--hidden {
@@ -405,6 +479,10 @@ body {
   gap: 6px;
   font-size: 0.85rem;
   color: var(--text);
+}
+
+.auth-label.auth-label--wide {
+  grid-column: 1 / -1;
 }
 
 .auth-input {
@@ -460,6 +538,12 @@ select.auth-input option {
   background: transparent;
   color: var(--text-h);
   border: 1px solid var(--border);
+}
+
+.auth-btn.auth-btn--ghost {
+  background: transparent;
+  color: var(--text);
+  border: 1px dashed var(--border);
 }
 
 .auth-error {
@@ -582,6 +666,11 @@ select.auth-input option {
 @media (max-width: 920px) {
   .auth-form {
     grid-template-columns: 1fr;
+  }
+
+  .auth-profile-summary {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

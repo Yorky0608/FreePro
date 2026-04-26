@@ -17,8 +17,10 @@ const DEFAULT_API_BASE_URL = 'https://1wos40ydh1.execute-api.us-east-2.amazonaws
 const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (import.meta.env.DEV ? '/api' : DEFAULT_API_BASE_URL)
 const WEB_SESSION_KEY = 'freedom-program:web-session:v1'
 
-/** @type {null | { id: number, email: string, token?: string, cloudUserId?: string }} */
+/** @type {null | { id: number, name?: string, email: string, token?: string, cloudUserId?: string }} */
 let session = null
+let authMode = 'login'
+let isProfileEditorOpen = false
 
 app.innerHTML = `
 	<div class="shell">
@@ -51,7 +53,34 @@ app.innerHTML = `
 					<div class="auth-status" id="authStatus">Not logged in</div>
 					<button class="auth-btn" id="logoutBtn" type="button" hidden>Log out</button>
 				</div>
+				<div class="auth-mode" id="authModeSwitch" aria-label="Account mode">
+					<button class="auth-mode-btn auth-mode-btn--active" id="authModeLoginBtn" type="button">Log in</button>
+					<button class="auth-mode-btn" id="authModeRegisterBtn" type="button">Create account</button>
+				</div>
+				<div class="auth-hint" id="authHint">Use your email and password to log in.</div>
+				<div class="auth-profile-summary" id="profileSummary" hidden>
+					<div class="auth-profile-copy">
+						<div class="auth-profile-label">Name</div>
+						<div class="auth-profile-value" id="profileCurrentName">No name set</div>
+					</div>
+					<button class="auth-btn auth-btn--secondary" id="profileEditBtn" type="button">Edit name</button>
+				</div>
+				<form class="auth-profile" id="profileForm" hidden>
+					<label class="auth-label auth-label--wide">
+						<span>Name</span>
+						<input id="profileName" class="auth-input" type="text" autocomplete="name" maxlength="120" />
+					</label>
+					<div class="auth-actions">
+						<button class="auth-btn auth-btn--secondary" id="profileSaveBtn" type="submit">Save name</button>
+						<button class="auth-btn auth-btn--ghost" id="profileCancelBtn" type="button">Cancel</button>
+					</div>
+					<div class="auth-error" id="profileError" role="status" aria-live="polite" hidden></div>
+				</form>
 				<form class="auth-form" id="authForm" autocomplete="on">
+					<label class="auth-label" id="authNameField" hidden>
+						<span>Name</span>
+						<input id="authName" class="auth-input" type="text" autocomplete="name" maxlength="120" />
+					</label>
 					<label class="auth-label">
 						<span>Email</span>
 						<input id="authEmail" class="auth-input" type="email" autocomplete="username" inputmode="email" />
@@ -62,7 +91,7 @@ app.innerHTML = `
 					</label>
 					<div class="auth-actions">
 						<button class="auth-btn" id="loginBtn" type="submit">Log in</button>
-						<button class="auth-btn auth-btn--secondary" id="registerBtn" type="button">Create account</button>
+						<button class="auth-btn auth-btn--secondary" id="registerBtn" type="button">Create account instead</button>
 					</div>
 					<div class="auth-error" id="authError" role="status" aria-live="polite" hidden></div>
 				</form>
@@ -248,7 +277,21 @@ const entryError = /** @type {HTMLDivElement} */ (document.querySelector('#entry
 
 const authWrap = /** @type {HTMLDivElement} */ (document.querySelector('#authWrap'))
 const authStatus = /** @type {HTMLDivElement} */ (document.querySelector('#authStatus'))
+const authHint = /** @type {HTMLDivElement} */ (document.querySelector('#authHint'))
+const authModeSwitch = /** @type {HTMLDivElement} */ (document.querySelector('#authModeSwitch'))
+const authModeLoginBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#authModeLoginBtn'))
+const authModeRegisterBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#authModeRegisterBtn'))
+const profileSummary = /** @type {HTMLDivElement} */ (document.querySelector('#profileSummary'))
+const profileCurrentName = /** @type {HTMLDivElement} */ (document.querySelector('#profileCurrentName'))
+const profileEditBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileEditBtn'))
+const profileForm = /** @type {HTMLFormElement} */ (document.querySelector('#profileForm'))
+const profileName = /** @type {HTMLInputElement} */ (document.querySelector('#profileName'))
+const profileSaveBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileSaveBtn'))
+const profileCancelBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileCancelBtn'))
+const profileError = /** @type {HTMLDivElement} */ (document.querySelector('#profileError'))
 const authForm = /** @type {HTMLFormElement} */ (document.querySelector('#authForm'))
+const authNameField = /** @type {HTMLLabelElement} */ (document.querySelector('#authNameField'))
+const authName = /** @type {HTMLInputElement} */ (document.querySelector('#authName'))
 const authEmail = /** @type {HTMLInputElement} */ (document.querySelector('#authEmail'))
 const authPassword = /** @type {HTMLInputElement} */ (document.querySelector('#authPassword'))
 const loginBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#loginBtn'))
@@ -731,11 +774,12 @@ function loadWebSessionFromStorage() {
 		const raw = localStorage.getItem(WEB_SESSION_KEY)
 		if (!raw) return null
 		const data = JSON.parse(raw)
+		const name = typeof data?.name === 'string' ? data.name.trim() : ''
 		const email = typeof data?.email === 'string' ? data.email : ''
 		const token = typeof data?.token === 'string' ? data.token : ''
 		const cloudUserId = typeof data?.cloudUserId === 'string' ? data.cloudUserId : ''
 		if (!email || !token) return null
-		return { id: 0, email, token, cloudUserId: cloudUserId || undefined }
+		return { id: 0, name: name || undefined, email, token, cloudUserId: cloudUserId || undefined }
 	} catch {
 		return null
 	}
@@ -750,6 +794,7 @@ function saveWebSessionToStorage(nextSession) {
 		localStorage.setItem(
 			WEB_SESSION_KEY,
 			JSON.stringify({
+				name: nextSession.name,
 				email: nextSession.email,
 				token: nextSession.token,
 				cloudUserId: nextSession.cloudUserId,
@@ -758,6 +803,11 @@ function saveWebSessionToStorage(nextSession) {
 	} catch {
 		// ignore
 	}
+}
+
+function normalizePersonName(name) {
+	if (typeof name !== 'string') return ''
+	return name.trim().replace(/\s+/g, ' ').slice(0, 120)
 }
 
 async function apiJson({ method, apiPath, token, body, query, contentType }) {
@@ -848,10 +898,10 @@ async function apiJson({ method, apiPath, token, body, query, contentType }) {
 	return data
 }
 
-async function cloudRegister(email, password) {
+async function cloudRegister(email, password, name) {
 	// Use a "simple" Content-Type to avoid CORS preflight in browsers when the API
 	// doesn't support OPTIONS. The backend can still parse JSON from the body string.
-	return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password }, contentType: 'text/plain' })
+	return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password, name }, contentType: 'text/plain' })
 }
 
 async function cloudLogin(email, password) {
@@ -862,8 +912,16 @@ async function cloudGetGoal({ token }) {
 	return apiJson({ method: 'GET', apiPath: '/profile/goal', token })
 }
 
+async function cloudGetProfileName({ token }) {
+	return apiJson({ method: 'GET', apiPath: '/profile/name', token })
+}
+
 async function cloudSetGoal({ token, goalDollars }) {
 	return apiJson({ method: 'POST', apiPath: '/profile/goal', token, body: { goalDollars } })
+}
+
+async function cloudSetProfileName({ token, name }) {
+	return apiJson({ method: 'POST', apiPath: '/profile/name', token, body: { name } })
 }
 
 function formatDollarsFromUnits(units) {
@@ -943,6 +1001,39 @@ function showAuthError(message) {
 	authError.hidden = !message
 }
 
+function showProfileError(message) {
+	if (!profileError) return
+	profileError.textContent = message
+	profileError.hidden = !message
+}
+
+function setAuthMode(mode) {
+	authMode = mode === 'register' ? 'register' : 'login'
+	if (!authNameField || !loginBtn || !registerBtn || !authHint || !authModeLoginBtn || !authModeRegisterBtn) return
+
+	const isRegister = authMode === 'register'
+	authNameField.hidden = !isRegister
+	authHint.hidden = false
+	loginBtn.textContent = isRegister ? 'Create account' : 'Log in'
+	registerBtn.textContent = isRegister ? 'Back to login' : 'Create account instead'
+	authHint.textContent = isRegister
+		? 'Create an account with your name, email, and password.'
+		: 'Use your email and password to log in.'
+	authModeLoginBtn.classList.toggle('auth-mode-btn--active', !isRegister)
+	authModeRegisterBtn.classList.toggle('auth-mode-btn--active', isRegister)
+	authPassword.autocomplete = isRegister ? 'new-password' : 'current-password'
+	showAuthError('')
+}
+
+function setProfileEditorOpen(isOpen) {
+	isProfileEditorOpen = Boolean(isOpen)
+	if (!profileForm || !profileSummary || !session) return
+	profileForm.hidden = !isProfileEditorOpen
+	profileSummary.hidden = isProfileEditorOpen
+	if (isProfileEditorOpen && profileName) profileName.value = session.name || ''
+	if (!isProfileEditorOpen) showProfileError('')
+}
+
 function resetGoalUi({ persistLocal }) {
 	setGoalUnits(0)
 	if (persistLocal) saveGoalDollarsToLocalStorage(0)
@@ -964,18 +1055,91 @@ function updateAuthUi() {
 
 	if (session) {
 		const cloudStatus = isDesktopApp ? (session?.token ? ' (cloud sync ON)' : ' (cloud sync OFF)') : ''
-		authStatus.textContent = `Logged in as ${session.email}${cloudStatus}`
+		const identity = session.name || session.email
+		authStatus.textContent = `Logged in as ${identity}${cloudStatus}`
 		logoutBtn.hidden = false
+		if (authModeSwitch) authModeSwitch.hidden = true
+		if (authHint) {
+			authHint.hidden = Boolean(session.name)
+			authHint.textContent = 'Your login email stays the same. Add a name if you want it shown on your account.'
+		}
+		if (profileCurrentName) profileCurrentName.textContent = session.name || 'No name set'
+		if (profileSummary) profileSummary.hidden = isProfileEditorOpen
+		if (profileForm) profileForm.hidden = !isProfileEditorOpen
+		if (profileName && document.activeElement !== profileName) profileName.value = session.name || ''
 		authForm.classList.add('auth-form--hidden')
+		authModeLoginBtn.hidden = true
+		authModeRegisterBtn.hidden = true
 		showAuthError('')
+		showProfileError('')
 	} else {
 		authStatus.textContent = 'Not logged in'
 		logoutBtn.hidden = true
+		isProfileEditorOpen = false
+		if (authModeSwitch) authModeSwitch.hidden = false
+		if (authHint) authHint.hidden = false
+		if (profileSummary) profileSummary.hidden = true
+		if (profileForm) profileForm.hidden = true
+		if (profileName) profileName.value = ''
 		authForm.classList.remove('auth-form--hidden')
+		authModeLoginBtn.hidden = false
+		authModeRegisterBtn.hidden = false
 		showAuthError('')
+		showProfileError('')
+		setAuthMode(authMode)
 	}
 	setDashboardAuthGate(Boolean(session))
 	renderRoute()
+}
+
+async function persistProfileName(name) {
+	if (!session) throw new Error('Not logged in')
+	const safeName = normalizePersonName(name)
+
+	if (isDesktopApp) {
+		if (!desktop?.profile?.setName) throw new Error('Profile updates are unavailable in this build')
+		const out = await desktop.profile.setName(safeName)
+		const nextName = normalizePersonName(out?.name)
+		session = { ...session, name: nextName || safeName || undefined }
+		setProfileEditorOpen(false)
+		updateAuthUi()
+		return
+	}
+
+	if (!session.token) throw new Error('Cloud sync is unavailable (no AWS token)')
+	const out = await cloudSetProfileName({ token: session.token, name: safeName })
+	const nextName = normalizePersonName(out?.name)
+	session = { ...session, name: nextName || safeName || undefined }
+	saveWebSessionToStorage(session)
+	setProfileEditorOpen(false)
+	updateAuthUi()
+}
+
+async function hydrateProfileNameFromCloud() {
+	if (!session?.token) return
+
+	try {
+		if (isDesktopApp) {
+			if (!desktop?.profile?.getName) return
+			const out = await desktop.profile.getName()
+			const nextName = normalizePersonName(out?.name)
+			if (nextName !== (session.name || '')) {
+				session = { ...session, name: nextName || undefined }
+				updateAuthUi()
+			}
+			return
+		}
+
+		const out = await cloudGetProfileName({ token: session.token })
+		const nextName = normalizePersonName(out?.name)
+		if (nextName !== (session.name || '')) {
+			session = { ...session, name: nextName || undefined }
+			saveWebSessionToStorage(session)
+			updateAuthUi()
+		}
+	} catch {
+		// ignore
+	}
 }
 
 function setDashboardAuthGate(isAuthed) {
@@ -1018,6 +1182,7 @@ async function refreshSessionAndLoad() {
 	updateAuthUi()
 	if (isDesktopApp) {
 		if (session) {
+			await hydrateProfileNameFromCloud()
 			await loadGoalFromDbOrMigrate()
 			await loadLedgerEntriesFromStorage()
 			void syncLedgerWithCloud()
@@ -1029,6 +1194,7 @@ async function refreshSessionAndLoad() {
 
 	// Web mode: if logged in, pull goal from cloud + ledger from localStorage.
 	if (session?.token) {
+		await hydrateProfileNameFromCloud()
 		resetGoalUi({ persistLocal: false })
 		await loadGoalFromCloudOrFallback()
 		await loadLedgerEntriesFromStorage()
@@ -1556,17 +1722,33 @@ authForm?.addEventListener('submit', async (e) => {
 	showAuthError('')
 	try {
 		loginBtn.disabled = true
+		registerBtn.disabled = true
+		const isRegister = authMode === 'register'
+		const name = normalizePersonName(String(authName?.value || ''))
 		const email = String(authEmail.value || '').trim().toLowerCase()
 		const password = String(authPassword.value || '')
 
-		if (isDesktopApp) {
+		if (isRegister) {
+			if (isDesktopApp) {
+				session = await desktop.auth.register(email, password, name)
+			} else {
+				const out = await cloudRegister(email, password, name)
+				const token = typeof out?.token === 'string' ? out.token : ''
+				const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
+				const returnedName = typeof out?.name === 'string' ? out.name.trim() : ''
+				if (!token) throw new Error('Registration failed')
+				session = { id: 0, name: returnedName || name || undefined, email, token, cloudUserId: cloudUserId || undefined }
+				saveWebSessionToStorage(session)
+			}
+		} else if (isDesktopApp) {
 			session = await desktop.auth.login(email, password)
 		} else {
 			const out = await cloudLogin(email, password)
 			const token = typeof out?.token === 'string' ? out.token : ''
 			const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
+			const returnedName = typeof out?.name === 'string' ? out.name.trim() : ''
 			if (!token) throw new Error('Login failed')
-			session = { id: 0, email, token, cloudUserId: cloudUserId || undefined }
+			session = { id: 0, name: returnedName || undefined, email, token, cloudUserId: cloudUserId || undefined }
 			saveWebSessionToStorage(session)
 		}
 
@@ -1574,7 +1756,10 @@ authForm?.addEventListener('submit', async (e) => {
 		resetGoalUi({ persistLocal: !isDesktopApp })
 		didWarnDesktopGoalSync = false
 
+		authName.value = ''
 		authPassword.value = ''
+		setAuthMode('login')
+		setProfileEditorOpen(false)
 		updateAuthUi()
 		if (isDesktopApp) {
 			await loadGoalFromDbOrMigrate()
@@ -1587,49 +1772,34 @@ authForm?.addEventListener('submit', async (e) => {
 		}
 		updateProgress()
 	} catch (err) {
-		showAuthError(err?.message ? String(err.message) : 'Login failed')
+		showAuthError(err?.message ? String(err.message) : (authMode === 'register' ? 'Registration failed' : 'Login failed'))
 	} finally {
 		loginBtn.disabled = false
+		registerBtn.disabled = false
 	}
 })
 
 registerBtn?.addEventListener('click', async () => {
-	showAuthError('')
+	setAuthMode(authMode === 'register' ? 'login' : 'register')
+})
+
+authModeLoginBtn?.addEventListener('click', () => setAuthMode('login'))
+authModeRegisterBtn?.addEventListener('click', () => setAuthMode('register'))
+
+profileEditBtn?.addEventListener('click', () => setProfileEditorOpen(true))
+profileCancelBtn?.addEventListener('click', () => setProfileEditorOpen(false))
+
+profileForm?.addEventListener('submit', async (e) => {
+	e.preventDefault()
+	showProfileError('')
 	try {
-		registerBtn.disabled = true
-		const email = String(authEmail.value || '').trim().toLowerCase()
-		const password = String(authPassword.value || '')
-
-		if (isDesktopApp) {
-			session = await desktop.auth.register(email, password)
-		} else {
-			const out = await cloudRegister(email, password)
-			const token = typeof out?.token === 'string' ? out.token : ''
-			const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
-			if (!token) throw new Error('Registration failed')
-			session = { id: 0, email, token, cloudUserId: cloudUserId || undefined }
-			saveWebSessionToStorage(session)
-		}
-
-		resetGoalUi({ persistLocal: !isDesktopApp })
-		didWarnDesktopGoalSync = false
-
-		authPassword.value = ''
-		updateAuthUi()
-		if (isDesktopApp) {
-			await loadGoalFromDbOrMigrate()
-			await loadLedgerEntriesFromStorage()
-			void syncLedgerWithCloud()
-		} else {
-			await loadGoalFromCloudOrFallback()
-			await loadLedgerEntriesFromStorage()
-			void syncLedgerWithCloud()
-		}
-		updateProgress()
+		if (!profileSaveBtn) return
+		profileSaveBtn.disabled = true
+		await persistProfileName(String(profileName?.value || ''))
 	} catch (err) {
-		showAuthError(err?.message ? String(err.message) : 'Registration failed')
+		showProfileError(err?.message ? String(err.message) : 'Could not save your name')
 	} finally {
-		registerBtn.disabled = false
+		if (profileSaveBtn) profileSaveBtn.disabled = false
 	}
 })
 
@@ -1649,6 +1819,7 @@ logoutBtn?.addEventListener('click', async () => {
 			saveWebSessionToStorage(null)
 			resetGoalUi({ persistLocal: true })
 		}
+		setProfileEditorOpen(false)
 		try {
 			saveLedgerCloudSyncState({ pendingClientIds: [], lastPullMs: 0 })
 		} catch {
@@ -1662,6 +1833,8 @@ logoutBtn?.addEventListener('click', async () => {
 		logoutBtn.disabled = false
 	}
 })
+
+setAuthMode('login')
 
 window.addEventListener('resize', () => {
 	layoutRocket()

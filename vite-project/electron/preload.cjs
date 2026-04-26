@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   auth: {
     getSession: () => ipcRenderer.invoke('auth:getSession'),
-    register: (email, password) => ipcRenderer.invoke('auth:register', { email, password }),
+    register: (email, password, name) => ipcRenderer.invoke('auth:register', { email, password, name }),
     login: (email, password) => ipcRenderer.invoke('auth:login', { email, password }),
     logout: () => ipcRenderer.invoke('auth:logout'),
   },
@@ -15,7 +15,9 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   profile: {
     getGoal: () => ipcRenderer.invoke('profile:getGoal'),
+    getName: () => ipcRenderer.invoke('profile:getName'),
     setGoal: (goalDollars) => ipcRenderer.invoke('profile:setGoal', { goalDollars }),
+    setName: (name) => ipcRenderer.invoke('profile:setName', { name }),
   },
   ledger: {
     listEntries: () => ipcRenderer.invoke('ledger:listEntries'),

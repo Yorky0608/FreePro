@@ -18,7 +18,7 @@ function logSyncDebug(...args) {
   }
 }
 
-/** @type {Map<number, { id: number, email: string, cloudToken?: string, cloudUserId?: string, cloudPulled?: boolean, lastCloudPullMs?: number, cloudGoalPulled?: boolean, lastCloudGoalPullMs?: number }>} */
+/** @type {Map<number, { id: number, name?: string, email: string, cloudToken?: string, cloudUserId?: string, cloudPulled?: boolean, lastCloudPullMs?: number, cloudGoalPulled?: boolean, lastCloudGoalPullMs?: number }>} */
 const sessionByWebContentsId = new Map()
 
 function getSessionFromEvent(event) {
@@ -85,8 +85,8 @@ async function apiJson({ method, apiPath, token, body, query }) {
   return data
 }
 
-async function cloudRegister(email, password) {
-  return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password } })
+async function cloudRegister(email, password, name) {
+  return apiJson({ method: 'POST', apiPath: '/auth/register', body: { email, password, name } })
 }
 
 async function cloudLogin(email, password) {
@@ -109,6 +109,14 @@ async function cloudSetGoal({ token, goalDollars }) {
   return apiJson({ method: 'POST', apiPath: '/profile/goal', token, body: { goalDollars } })
 }
 
+async function cloudGetProfileName({ token }) {
+  return apiJson({ method: 'GET', apiPath: '/profile/name', token })
+}
+
+async function cloudSetProfileName({ token, name }) {
+  return apiJson({ method: 'POST', apiPath: '/profile/name', token, body: { name } })
+}
+
 function ensureLocalUser({ email, password }) {
 
   const existing = db.getUserByEmail(email)
@@ -129,21 +137,27 @@ function ensureLocalUser({ email, password }) {
   throw err
 }
 
-function ensureLocalUserAfterCloudLogin({ email, password }) {
+function ensureLocalUserAfterCloudLogin({ email, password, name }) {
   const existing = db.getUserByEmail(email)
   const passwordHash = bcrypt.hashSync(password, 10)
+  const safeName = db.normalizeName(name)
 
   if (existing) {
     const ok = bcrypt.compareSync(password, existing.passwordHash)
     if (!ok) {
       // Cloud accepted the password, so keep local auth aligned.
       db.updateUserPasswordHash({ userId: existing.id, passwordHash })
-      return { ...existing, passwordHash }
+      if (safeName && safeName !== existing.name) db.updateUserName({ userId: existing.id, name: safeName })
+      return { ...existing, name: safeName || existing.name, passwordHash }
+    }
+    if (safeName && safeName !== existing.name) {
+      db.updateUserName({ userId: existing.id, name: safeName })
+      return { ...existing, name: safeName }
     }
     return existing
   }
 
-  return db.createUser({ email, passwordHash })
+  return db.createUser({ email, passwordHash, name: safeName })
 }
 
 async function cloudPullAndMerge({ token, localUserId, sinceMs }) {
@@ -217,6 +231,7 @@ function setupIpc() {
     return s
       ? {
           id: s.id,
+          name: s.name,
           email: s.email,
           token: s.cloudToken,
           cloudUserId: s.cloudUserId,
@@ -233,6 +248,7 @@ function setupIpc() {
   ipcMain.handle('auth:register', async (event, payload) => {
     const email = db.normalizeEmail(payload?.email)
     const password = typeof payload?.password === 'string' ? payload.password : ''
+    const name = db.normalizeName(payload?.name)
     if (!email) throw new Error('Email is required')
     if (password.length < 6) throw new Error('Password must be at least 6 characters')
 
@@ -242,7 +258,7 @@ function setupIpc() {
     /** @type {null | { userId?: string, token?: string }} */
     let cloud = null
     try {
-      cloud = await cloudRegister(email, password)
+      cloud = await cloudRegister(email, password, name)
       logSyncDebug('cloud register ok')
     } catch (err) {
       logSyncDebug('cloud register failed', err?.status || '', err?.message || String(err))
@@ -253,12 +269,13 @@ function setupIpc() {
     }
 
     const passwordHash = bcrypt.hashSync(password, 10)
-    const user = db.createUser({ email, passwordHash })
+    const user = db.createUser({ email, passwordHash, name: name || cloud?.name })
 
     const wcId = event?.sender?.id
     if (Number.isFinite(wcId)) {
       sessionByWebContentsId.set(wcId, {
         id: user.id,
+        name: user.name,
         email: user.email,
         cloudToken: typeof cloud?.token === 'string' ? cloud.token : undefined,
         cloudUserId: typeof cloud?.userId === 'string' ? cloud.userId : undefined,
@@ -293,6 +310,7 @@ function setupIpc() {
     const sessionRecord = Number.isFinite(wcId) ? sessionByWebContentsId.get(wcId) : null
     return {
       id: user.id,
+      name: user.name,
       email: user.email,
       token: sessionRecord?.cloudToken,
       cloudUserId: sessionRecord?.cloudUserId,
@@ -320,13 +338,18 @@ function setupIpc() {
     // If cloud login succeeds, make sure local auth exists and is consistent.
     // Otherwise, require an existing local account and validate the password.
     const localUser = cloud?.token
-      ? ensureLocalUserAfterCloudLogin({ email, password })
+      ? ensureLocalUserAfterCloudLogin({
+          email,
+          password,
+          name: typeof cloud?.name === 'string' ? cloud.name : '',
+        })
       : ensureLocalUser({ email, password })
 
     const wcId = event?.sender?.id
     if (Number.isFinite(wcId)) {
       sessionByWebContentsId.set(wcId, {
         id: localUser.id,
+        name: localUser.name,
         email: localUser.email,
         cloudToken: typeof cloud?.token === 'string' ? cloud.token : undefined,
         cloudUserId: typeof cloud?.userId === 'string' ? cloud.userId : undefined,
@@ -361,6 +384,7 @@ function setupIpc() {
     const sessionRecord = Number.isFinite(wcId) ? sessionByWebContentsId.get(wcId) : null
     return {
       id: localUser.id,
+      name: localUser.name,
       email: localUser.email,
       token: sessionRecord?.cloudToken,
       cloudUserId: sessionRecord?.cloudUserId,
@@ -437,6 +461,26 @@ function setupIpc() {
     return { goalDollars: meta ? meta.goalDollars : 0 }
   })
 
+  ipcMain.handle('profile:getName', async (event) => {
+    const session = requireSession(event)
+
+    if (session.cloudToken) {
+      try {
+        const out = await cloudGetProfileName({ token: session.cloudToken })
+        const syncedName = db.normalizeName(out?.name)
+        if (syncedName !== session.name) {
+          db.updateUserName({ userId: session.id, name: syncedName })
+          session.name = syncedName || undefined
+        }
+        return { name: session.name }
+      } catch (err) {
+        logSyncDebug('cloud profile name get failed', err?.status || '', err?.message || String(err))
+      }
+    }
+
+    return { name: session.name }
+  })
+
   ipcMain.handle('profile:setGoal', async (event, payload) => {
     const session = requireSession(event)
     const goalDollars = Number(payload?.goalDollars)
@@ -469,6 +513,31 @@ function setupIpc() {
     }
 
     return true
+  })
+
+  ipcMain.handle('profile:setName', async (event, payload) => {
+    const session = requireSession(event)
+    const requestedName = db.normalizeName(payload?.name)
+
+    db.updateUserName({ userId: session.id, name: requestedName })
+    session.name = requestedName || undefined
+
+    if (session.cloudToken) {
+      try {
+        const out = await cloudSetProfileName({ token: session.cloudToken, name: requestedName })
+        const syncedName = db.normalizeName(out?.name)
+        if (syncedName !== requestedName) {
+          db.updateUserName({ userId: session.id, name: syncedName })
+          session.name = syncedName || undefined
+        }
+        logSyncDebug('cloud profile name save ok')
+      } catch (err) {
+        logSyncDebug('cloud profile name save failed', err?.status || '', err?.message || String(err))
+        // ignore (local save still succeeded)
+      }
+    }
+
+    return { name: session.name }
   })
 
   ipcMain.handle('ledger:listEntries', async (event) => {

@@ -19,6 +19,11 @@ function normalizeEmail(email) {
 	return email.trim().toLowerCase()
 }
 
+function normalizeName(name) {
+	if (typeof name !== 'string') return ''
+	return name.trim().replace(/\s+/g, ' ').slice(0, 120)
+}
+
 function locateSqlWasm(file) {
 	const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm')
 	const wasmDir = path.dirname(wasmPath)
@@ -38,6 +43,7 @@ function migrate() {
 		PRAGMA foreign_keys = ON;
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT,
 			email TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
 			created_at_ms INTEGER NOT NULL
@@ -77,6 +83,16 @@ function migrate() {
 		CREATE INDEX IF NOT EXISTS idx_savings_user_month ON savings(user_id, month_ms);
 		CREATE INDEX IF NOT EXISTS idx_ledger_user_day ON ledger_entries(user_id, day_ms);
 	`)
+
+	try {
+		const userInfo = getAll('PRAGMA table_info(users)')
+		const userCols = new Set(userInfo.map((r) => String(r.name)))
+		if (!userCols.has('name')) {
+			run('ALTER TABLE users ADD COLUMN name TEXT')
+		}
+	} catch {
+		// ignore
+	}
 
 	// Backfill/migrate existing installs that created ledger_entries before client_id existed.
 	try {
@@ -147,34 +163,49 @@ async function initDb({ userDataPath }) {
 	persist()
 }
 
-function createUser({ email, passwordHash }) {
+function createUser({ email, passwordHash, name }) {
 	const safeEmail = normalizeEmail(email)
+	const safeName = normalizeName(name)
 	if (!safeEmail) throw new Error('Email is required')
 	if (typeof passwordHash !== 'string' || passwordHash.length < 10) throw new Error('Invalid password hash')
 
 	const now = Date.now()
 	run(
-		`INSERT INTO users (email, password_hash, created_at_ms) VALUES (?, ?, ?)` ,
-		[safeEmail, passwordHash, now]
+		`INSERT INTO users (name, email, password_hash, created_at_ms) VALUES (?, ?, ?, ?)` ,
+		[safeName || null, safeEmail, passwordHash, now]
 	)
 	persist()
 
-	const row = getOne('SELECT id, email, created_at_ms FROM users WHERE email = ?', [safeEmail])
+	const row = getOne('SELECT id, name, email, created_at_ms FROM users WHERE email = ?', [safeEmail])
 	if (!row) throw new Error('Failed to create user')
-	return { id: Number(row.id), email: String(row.email), createdAtMs: Number(row.created_at_ms) }
+	return {
+		id: Number(row.id),
+		name: row.name ? String(row.name) : '',
+		email: String(row.email),
+		createdAtMs: Number(row.created_at_ms),
+	}
 }
 
 function getUserByEmail(email) {
 	const safeEmail = normalizeEmail(email)
 	if (!safeEmail) return null
-	const row = getOne('SELECT id, email, password_hash, created_at_ms FROM users WHERE email = ?', [safeEmail])
+	const row = getOne('SELECT id, name, email, password_hash, created_at_ms FROM users WHERE email = ?', [safeEmail])
 	if (!row) return null
 	return {
 		id: Number(row.id),
+		name: row.name ? String(row.name) : '',
 		email: String(row.email),
 		passwordHash: String(row.password_hash),
 		createdAtMs: Number(row.created_at_ms),
 	}
+}
+
+function updateUserName({ userId, name }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	const safeName = normalizeName(name)
+	run('UPDATE users SET name = ? WHERE id = ?', [safeName || null, userId])
+	persist()
+	return true
 }
 
 function updateUserPasswordHash({ userId, passwordHash }) {
@@ -384,4 +415,6 @@ module.exports = {
 	listLedgerEntries,
 	addLedgerEntry,
 	normalizeEmail,
+	normalizeName,
+	updateUserName,
 }
