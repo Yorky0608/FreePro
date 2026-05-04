@@ -592,9 +592,178 @@ select.auth-input option {
   gap: 10px 12px;
 }
 
+.habit-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.habit-header {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.habit-kicker {
+  margin-bottom: 6px;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.habit-copy {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.habit-form {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.habit-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.habit-textarea {
+  min-height: 112px;
+  resize: vertical;
+  font: inherit;
+}
+
+.habit-textarea--large {
+  min-height: 136px;
+}
+
+.habit-list {
+  display: grid;
+  gap: 12px;
+}
+
+.habit-list-title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--text-h);
+}
+
+.habit-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.habit-card {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.habit-card + .habit-card {
+  margin-top: 12px;
+}
+
+.habit-card-head,
+.habit-popup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.habit-card-week,
+.habit-popup-week {
+  color: var(--text-h);
+  font-size: 1rem;
+}
+
+.habit-card-chip {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.habit-card-grid,
+.habit-popup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.habit-card-grid li,
+.habit-popup-grid > div {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.habit-card-grid-wide,
+.habit-popup-grid-wide {
+  grid-column: 1 / -1;
+}
+
+.habit-card-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.habit-card-text {
+  color: var(--text-h);
+  line-height: 1.45;
+}
+
+.habit-empty {
+  color: var(--text);
+  font-style: italic;
+}
+
+.habit-popup {
+  margin-top: 16px;
+}
+
+.habit-popup-inner {
+  padding: 14px;
+  border: 1px solid var(--accent-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  box-shadow: var(--shadow);
+}
+
+.habit-gate {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+}
+
 @media (max-width: 900px) {
   .details-entry {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .habit-fields,
+  .habit-card-grid,
+  .habit-popup-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -702,6 +871,16 @@ select.auth-input option {
   color: var(--text);
 }
 
+.readout-edit-btn {
+  margin-left: auto;
+}
+
+.sliderHint {
+  margin-top: 12px;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
 .sliderWrap {
   position: relative;
   padding-top: 22px;
@@ -791,6 +970,11 @@ select.auth-input option {
   outline-offset: 4px;
 }
 
+.range:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+}
+
 .minmax {
   display: flex;
   justify-content: space-between;
@@ -804,6 +988,14 @@ select.auth-input option {
   .topbar-inner {
     grid-template-columns: 1fr;
     justify-items: center;
+  }
+
+  .readout {
+    flex-wrap: wrap;
+  }
+
+  .readout-edit-btn {
+    margin-left: 0;
   }
   .topbar-cta {
     justify-self: center;

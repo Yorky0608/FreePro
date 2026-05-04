@@ -18,9 +18,227 @@ const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (impo
 const WEB_SESSION_KEY = 'freedom-program:web-session:v1'
 
 /** @type {null | { id: number, name?: string, email: string, token?: string, cloudUserId?: string }} */
+
 let session = null
 let authMode = 'login'
 let isProfileEditorOpen = false
+
+// --- Habit Tracker ---
+const HABIT_STORAGE_PREFIX = 'freedom-program:habits:v1:';
+function getHabitStorageKey() {
+	const email = String(session?.email || '').trim().toLowerCase();
+	return `${HABIT_STORAGE_PREFIX}${email || 'anonymous'}`;
+}
+
+function loadHabitsFromLocalStorage() {
+	try {
+		const raw = localStorage.getItem(getHabitStorageKey());
+		if (!raw) return [];
+		const data = JSON.parse(raw);
+		if (!Array.isArray(data)) return [];
+		return data;
+	} catch {
+		return [];
+	}
+}
+
+function saveHabitsToLocalStorage(habits) {
+	try {
+		localStorage.setItem(getHabitStorageKey(), JSON.stringify(habits));
+	} catch {
+		// ignore
+	}
+}
+
+let habitEntries = [];
+
+function escapeHtml(value) {
+	return String(value || '')
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&#39;')
+}
+
+function formatHabitText(value) {
+	const safe = escapeHtml(value).trim()
+	if (!safe) return '<span class="habit-empty">No entry yet.</span>'
+	return safe.replace(/\n/g, '<br />')
+}
+
+function renderHabitTracker() {
+	const wrap = document.getElementById('habitTrackerWrap');
+	if (!wrap) return;
+	if (!session) {
+		wrap.innerHTML = '<div class="habit-gate">Log in to use the habit tracker.</div>';
+		return;
+	}
+
+	let html = `<div class="habit-shell">
+		<div class="habit-header">
+			<div>
+				<div class="habit-kicker">Weekly Reflection</div>
+				<p class="habit-copy">Capture what happened this week, what you learned, and how your direction is changing over time.</p>
+			</div>
+		</div>
+		<form id="habitForm" class="habit-form">
+			<div class="habit-fields">
+				<label class="auth-label auth-label--wide">
+					<span>Week of</span>
+					<input type="date" id="habitDate" class="auth-input" required />
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Financial reflection</span>
+					<textarea id="habitFinancial" class="auth-input habit-textarea" rows="4"></textarea>
+				</label>
+				<label class="auth-label">
+					<span>Jobs held</span>
+					<textarea id="habitJobs" class="auth-input habit-textarea" rows="4"></textarea>
+				</label>
+				<label class="auth-label">
+					<span>Lessons learned</span>
+					<textarea id="habitLessons" class="auth-input habit-textarea" rows="4"></textarea>
+				</label>
+				<label class="auth-label">
+					<span>Pursuit of meaningful life work</span>
+					<textarea id="habitMeaning" class="auth-input habit-textarea" rows="4"></textarea>
+				</label>
+				<label class="auth-label">
+					<span>Strengths and weaknesses</span>
+					<textarea id="habitStrengths" class="auth-input habit-textarea" rows="4"></textarea>
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>How I'm growing each week</span>
+					<textarea id="habitGrowth" class="auth-input habit-textarea habit-textarea--large" rows="5"></textarea>
+				</label>
+			</div>
+			<div class="auth-actions">
+				<button type="submit" class="auth-btn">Save Entry</button>
+			</div>
+			<div id="habitError" class="auth-error" hidden></div>
+		</form>`;
+
+	if (habitEntries.length > 0) {
+		html += '<div class="habit-list"><h3 class="habit-list-title">Past Weeks</h3>';
+		html += '<ul>' + habitEntries.map((entry) => `
+			<li class="habit-card">
+				<div class="habit-card-head">
+					<strong class="habit-card-week">${escapeHtml(entry.week)}</strong>
+					<span class="habit-card-chip">Weekly snapshot</span>
+				</div>
+				<ul class="habit-card-grid">
+					<li class="habit-card-grid-wide"><span class="habit-card-label">Financial reflection</span><div class="habit-card-text">${formatHabitText(entry.financial)}</div></li>
+					<li><span class="habit-card-label">Jobs held</span><div class="habit-card-text">${formatHabitText(entry.jobs)}</div></li>
+					<li><span class="habit-card-label">Lessons learned</span><div class="habit-card-text">${formatHabitText(entry.lessons)}</div></li>
+					<li><span class="habit-card-label">Meaningful life work</span><div class="habit-card-text">${formatHabitText(entry.meaning)}</div></li>
+					<li><span class="habit-card-label">Strengths and weaknesses</span><div class="habit-card-text">${formatHabitText(entry.strengths)}</div></li>
+					<li class="habit-card-grid-wide"><span class="habit-card-label">Growth this week</span><div class="habit-card-text">${formatHabitText(entry.growth)}</div></li>
+				</ul>
+			</li>
+		`).join('') + '</ul></div>';
+	}
+
+	html += '</div>'
+
+	wrap.innerHTML = html;
+	const form = document.getElementById('habitForm');
+	if (form) {
+		form.addEventListener('submit', (event) => {
+			event.preventDefault();
+			const week = document.getElementById('habitDate')?.value || '';
+			const financial = document.getElementById('habitFinancial')?.value || '';
+			const jobs = document.getElementById('habitJobs')?.value || '';
+			const lessons = document.getElementById('habitLessons')?.value || '';
+			const meaning = document.getElementById('habitMeaning')?.value || '';
+			const strengths = document.getElementById('habitStrengths')?.value || '';
+			const growth = document.getElementById('habitGrowth')?.value || '';
+			const errorOut = document.getElementById('habitError');
+
+			if (!week) {
+				if (errorOut) {
+					errorOut.textContent = 'Please select a week.';
+					errorOut.hidden = false;
+				}
+				return;
+			}
+
+			if (errorOut) {
+				errorOut.textContent = '';
+				errorOut.hidden = true;
+			}
+
+			const idx = habitEntries.findIndex((entry) => entry.week === week);
+			const entry = { week, financial, jobs, lessons, meaning, strengths, growth };
+			if (idx >= 0) habitEntries[idx] = entry;
+			else habitEntries.push(entry);
+			habitEntries.sort((a, b) => b.week.localeCompare(a.week));
+			saveHabitsToLocalStorage(habitEntries);
+			updateHabitTracker();
+		});
+	}
+}
+
+function loadHabitEntries() {
+	habitEntries = session ? loadHabitsFromLocalStorage() : [];
+}
+
+// Insert the habit tracker panel into the habits page
+window.addEventListener('DOMContentLoaded', () => {
+	updateHabitTracker();
+});
+
+// Show habit popups on dashboard
+function showHabitPopups() {
+	const container = document.getElementById('habitPopupContainer');
+	if (!container) return;
+	container.innerHTML = '';
+	if (!session || !habitEntries.length) return;
+	// Show the most recent entry
+	const latest = habitEntries[0];
+	const popup = document.createElement('div');
+	popup.className = 'habit-popup';
+	popup.innerHTML = `
+		<div class="habit-popup-inner">
+			<div class="habit-popup-head">
+				<strong>Latest Habit Entry</strong>
+				<span class="habit-popup-week">${escapeHtml(latest.week)}</span>
+			</div>
+			<div class="habit-popup-grid">
+				<div class="habit-popup-grid-wide"><span class="habit-card-label">Financial reflection</span><div class="habit-card-text">${formatHabitText(latest.financial)}</div></div>
+				<div><span class="habit-card-label">Jobs held</span><div class="habit-card-text">${formatHabitText(latest.jobs)}</div></div>
+				<div><span class="habit-card-label">Lessons learned</span><div class="habit-card-text">${formatHabitText(latest.lessons)}</div></div>
+				<div><span class="habit-card-label">Meaningful life work</span><div class="habit-card-text">${formatHabitText(latest.meaning)}</div></div>
+				<div><span class="habit-card-label">Strengths and weaknesses</span><div class="habit-card-text">${formatHabitText(latest.strengths)}</div></div>
+				<div class="habit-popup-grid-wide"><span class="habit-card-label">Growth this week</span><div class="habit-card-text">${formatHabitText(latest.growth)}</div></div>
+			</div>
+		</div>
+	`;
+	container.appendChild(popup);
+}
+
+// Patch updateHabitTracker to also show popups
+const origUpdateHabitTracker = updateHabitTracker;
+updateHabitTracker = function() {
+	origUpdateHabitTracker.apply(this, arguments);
+	showHabitPopups();
+};
+
+// Render habit tracker on session change
+function updateHabitTracker() {
+	loadHabitEntries();
+	renderHabitTracker();
+}
+
+// Patch updateAuthUi to also update habit tracker
+const origUpdateAuthUi = updateAuthUi;
+updateAuthUi = function() {
+	origUpdateAuthUi.apply(this, arguments);
+	updateHabitTracker();
+};
+
+// Initial render if script loads after DOMContentLoaded
+if (document.readyState !== 'loading') updateHabitTracker();
 
 app.innerHTML = `
 	<div class="shell">
@@ -30,6 +248,7 @@ app.innerHTML = `
 				<nav class="topbar-nav" aria-label="Primary">
 					<a class="topbar-link" href="#dashboard">Dashboard</a>
 					<a class="topbar-link" href="#details">Details</a>
+					<a class="topbar-link" href="#habits">Habits</a>
 				</nav>
 			</div>
 		</header>
@@ -131,44 +350,53 @@ app.innerHTML = `
 					</div>
 				</div>
 
-			<div class="readout" aria-label="Savings goal readout">
-				<span class="readout-label">Savings Goal</span>
-				<output class="readout-value" id="rocketValue" for="rocketRange">$0</output>
-				<span class="readout-max">Max $${(MAX * DOLLARS_PER_UNIT).toLocaleString()}</span>
-			</div>
-
-			<div class="sliderWrap">
-				<div class="rocket" id="rocket" aria-hidden="true">🚀</div>
-				<input
-					id="rocketRange"
-					class="range"
-					type="range"
-					min="${MIN}"
-					max="${MAX}"
-					step="1"
-					value="${MIN}"
-					aria-label="Target savings slider from $0 to $${(MAX * DOLLARS_PER_UNIT).toLocaleString()}"
-				/>
-				<div class="minmax" aria-hidden="true">
-					<span>${MIN}</span>
-					<span>${MAX}</span>
+				<div class="readout" aria-label="Savings goal readout">
+					<span class="readout-label">Savings Goal</span>
+					<output class="readout-value" id="rocketValue" for="rocketRange">$0</output>
+					<span class="readout-max">Max $${(MAX * DOLLARS_PER_UNIT).toLocaleString()}</span>
+					<button class="auth-btn auth-btn--secondary readout-edit-btn" id="goalEditBtn" type="button" hidden>Edit goal</button>
 				</div>
-			</div>
 
-			<div class="progress" aria-label="Progress toward goal">
-				<div class="bar" aria-label="Bar graph of current savings compared to 4-year goal">
-					<div class="bar-track" role="img" aria-label="Current savings as a percentage of your 4-year goal">
-						<div class="bar-fill" id="goalBarFill" style="width: 0%"></div>
+				<div class="sliderWrap">
+					<div class="rocket" id="rocket" aria-hidden="true">🚀</div>
+					<input
+						id="rocketRange"
+						class="range"
+						type="range"
+						min="${MIN}"
+						max="${MAX}"
+						step="1"
+						value="${MIN}"
+						aria-label="Target savings slider from $0 to $${(MAX * DOLLARS_PER_UNIT).toLocaleString()}"
+					/>
+					<div class="minmax" aria-hidden="true">
+						<span>${MIN}</span>
+						<span>${MAX}</span>
 					</div>
-					<div class="bar-meta" aria-hidden="true">
-						<span class="bar-current" id="barCurrent">Current: $0</span>
-						<span class="bar-goal" id="barGoal">Goal: $0</span>
+					<div class="sliderHint" id="goalSliderHint">Set your goal once, then use Edit goal if you want to change it later.</div>
+				</div>
+
+				<div class="progress" aria-label="Progress toward goal">
+					<div class="bar" aria-label="Bar graph of current savings compared to 4-year goal">
+						<div class="bar-track" role="img" aria-label="Current savings as a percentage of your 4-year goal">
+							<div class="bar-fill" id="goalBarFill" style="width: 0%"></div>
+						</div>
+						<div class="bar-meta" aria-hidden="true">
+							<span class="bar-current" id="barCurrent">Current: $0</span>
+							<span class="bar-goal" id="barGoal">Goal: $0</span>
+						</div>
 					</div>
 				</div>
-			</div>
+
+				<!-- Habit popups -->
+				<div id="habitPopupContainer"></div>
 			</div>
 		</section>
 
+		<section class="panel" id="habits" aria-label="Habit Tracker" hidden>
+			<h2>Habit Tracker</h2>
+			<div id="habitTrackerWrap"></div>
+		</section>
 
 		<section class="panel" id="details" aria-label="Income, expenses, and savings details" hidden>
 			<h2>Details</h2>
@@ -253,6 +481,8 @@ app.innerHTML = `
 const range = /** @type {HTMLInputElement} */ (document.querySelector('#rocketRange'))
 const valueOut = /** @type {HTMLOutputElement} */ (document.querySelector('#rocketValue'))
 const rocket = /** @type {HTMLDivElement} */ (document.querySelector('#rocket'))
+const goalEditBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#goalEditBtn'))
+const goalSliderHint = /** @type {HTMLDivElement} */ (document.querySelector('#goalSliderHint'))
 
 const detailChartCanvas = /** @type {HTMLCanvasElement} */ (document.querySelector('#detailChart'))
 const detailTooltip = /** @type {HTMLDivElement} */ (document.querySelector('#detailTooltip'))
@@ -692,6 +922,7 @@ let detailAnchorDayMs = (() => {
 
 /** @type {Array<{ id: number | string, clientId: string, dayMs: number, incomeDollars: number, expensesDollars: number, savingsDollars: number, createdAtMs?: number, updatedAtMs?: number }>} */
 let ledgerEntries = []
+let isGoalSliderLocked = false
 
 if (authWrap) {
 	authWrap.hidden = false
@@ -703,10 +934,12 @@ try {
 	if (savedGoalDollars > 0) {
 		const units = clamp(Math.round(savedGoalDollars / DOLLARS_PER_UNIT), MIN, MAX)
 		range.value = String(units)
+		setGoalSliderLocked(true)
 	}
 } catch {
 	// ignore
 }
+updateGoalSliderUi()
 // Optional logo override: if /logo.png exists (in public/), show it.
 if (heroLogo) {
 	heroLogo.addEventListener('load', () => {
@@ -722,22 +955,24 @@ if (heroLogo) {
 const homeSection = /** @type {HTMLElement} */ (document.querySelector('#home'))
 const dashboardSection = /** @type {HTMLElement} */ (document.querySelector('#dashboard'))
 const detailsSection = /** @type {HTMLElement} */ (document.querySelector('#details'))
+const habitsSection = /** @type {HTMLElement} */ (document.querySelector('#habits'))
 
 function normalizeRoute(hash) {
 	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
-	const allowed = new Set(['home', 'dashboard', 'details'])
+	const allowed = new Set(['home', 'dashboard', 'details', 'habits'])
 	return allowed.has(raw) ? raw : 'dashboard'
 }
 
 function renderRoute() {
 	const route = normalizeRoute(location.hash)
-	const needsAuth = route === 'details'
+	const needsAuth = route === 'details' || route === 'habits'
 	const authed = Boolean(session)
 	const target = needsAuth && !authed ? 'dashboard' : route
 
 	if (homeSection) homeSection.hidden = target !== 'home'
 	if (dashboardSection) dashboardSection.hidden = target !== 'dashboard'
 	if (detailsSection) detailsSection.hidden = target !== 'details'
+	if (habitsSection) habitsSection.hidden = target !== 'habits'
 
 	// Ensure charts render when navigating to details.
 	if (target === 'details') drawDetails()
@@ -1036,6 +1271,7 @@ function setProfileEditorOpen(isOpen) {
 
 function resetGoalUi({ persistLocal }) {
 	setGoalUnits(0)
+	setGoalSliderLocked(false)
 	if (persistLocal) saveGoalDollarsToLocalStorage(0)
 }
 
@@ -1217,6 +1453,7 @@ async function loadGoalFromCloudOrFallback() {
 	if (!Number.isFinite(goalDollars) || goalDollars < 0) goalDollars = 0
 	if (goalDollars > 0) {
 		setGoalUnits(goalDollars / DOLLARS_PER_UNIT)
+		setGoalSliderLocked(true)
 		saveGoalDollarsToLocalStorage(goalDollars)
 		return
 	}
@@ -1229,6 +1466,21 @@ async function loadGoalFromCloudOrFallback() {
 let suppressGoalPersist = false
 let goalTimer = null
 let didWarnDesktopGoalSync = false
+
+function updateGoalSliderUi() {
+	if (range) range.disabled = isGoalSliderLocked
+	if (goalEditBtn) goalEditBtn.hidden = !isGoalSliderLocked
+	if (goalSliderHint) {
+		goalSliderHint.textContent = isGoalSliderLocked
+			? 'Goal locked to avoid accidental changes on mobile. Tap Edit goal to adjust it.'
+			: 'Move the slider to set your goal. It will lock after you choose it.'
+	}
+}
+
+function setGoalSliderLocked(isLocked) {
+	isGoalSliderLocked = Boolean(isLocked)
+	updateGoalSliderUi()
+}
 
 function setGoalUnits(units) {
 	suppressGoalPersist = true
@@ -1265,6 +1517,7 @@ async function loadGoalFromDbOrMigrate() {
 	}
 
 	setGoalUnits(goalDollars / DOLLARS_PER_UNIT)
+	setGoalSliderLocked(goalDollars > 0)
 	saveGoalDollarsToLocalStorage(goalDollars)
 }
 
@@ -1716,6 +1969,13 @@ function onInput() {
 }
 
 range.addEventListener('input', onInput)
+range.addEventListener('change', () => {
+	if (!suppressGoalPersist) setGoalSliderLocked(true)
+})
+goalEditBtn?.addEventListener('click', () => {
+	setGoalSliderLocked(false)
+	range.focus()
+})
 
 authForm?.addEventListener('submit', async (e) => {
 	e.preventDefault()
