@@ -23,4 +23,8 @@ contextBridge.exposeInMainWorld('desktop', {
     listEntries: () => ipcRenderer.invoke('ledger:listEntries'),
     addEntry: ({ clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs }) => ipcRenderer.invoke('ledger:addEntry', { clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs }),
   },
+  appState: {
+    getRendererState: () => ipcRenderer.invoke('appState:getRendererState'),
+    setRendererState: (value) => ipcRenderer.invoke('appState:setRendererState', { value }),
+  },
 })

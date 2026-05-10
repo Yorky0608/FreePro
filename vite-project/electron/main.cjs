@@ -556,6 +556,17 @@ function setupIpc() {
     const updatedAtMs = Number(payload?.updatedAtMs)
     return db.addLedgerEntry({ userId: session.id, clientId, dayMs, incomeDollars, expensesDollars, savingsDollars, createdAtMs, updatedAtMs })
   })
+
+  ipcMain.handle('appState:getRendererState', async (event) => {
+    const session = requireSession(event)
+    const state = db.getAppState({ userId: session.id, stateKey: 'renderer_state_v1' })
+    return state?.value ?? null
+  })
+
+  ipcMain.handle('appState:setRendererState', async (event, payload) => {
+    const session = requireSession(event)
+    return db.setAppState({ userId: session.id, stateKey: 'renderer_state_v1', value: payload?.value ?? null })
+  })
 }
 
 function createWindow() {

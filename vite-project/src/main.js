@@ -21,36 +21,28 @@ const WEB_SESSION_KEY = 'freedom-program:web-session:v1'
 
 let session = null
 let authMode = 'login'
-let isProfileEditorOpen = false
-
-// --- Habit Tracker ---
-const HABIT_STORAGE_PREFIX = 'freedom-program:habits:v1:';
-function getHabitStorageKey() {
-	const email = String(session?.email || '').trim().toLowerCase();
-	return `${HABIT_STORAGE_PREFIX}${email || 'anonymous'}`;
+let habitBoardState = { items: [] }
+let profileSettings = {
+	name: '',
+	email: '',
+	contactInfo: '',
+	goalStartDate: '',
+	goalEndDate: '',
+	strengths: '',
+	weaknesses: '',
 }
+let ledgerEntryMetaByClientId = {}
+let weeklyReports = []
+let journalEntries = []
+let dailyReportWeekMs = startOfLocalWeekMs(new Date())
+let dailyReportDayIndex = getCurrentWeekdayIndex(new Date())
+let isHabitLedgerEditorOpen = false
 
-function loadHabitsFromLocalStorage() {
-	try {
-		const raw = localStorage.getItem(getHabitStorageKey());
-		if (!raw) return [];
-		const data = JSON.parse(raw);
-		if (!Array.isArray(data)) return [];
-		return data;
-	} catch {
-		return [];
-	}
-}
-
-function saveHabitsToLocalStorage(habits) {
-	try {
-		localStorage.setItem(getHabitStorageKey(), JSON.stringify(habits));
-	} catch {
-		// ignore
-	}
-}
-
-let habitEntries = [];
+const WEEKLY_REPORT_STORAGE_PREFIX = 'freedom-program:weekly-reports:v1:'
+const JOURNAL_STORAGE_PREFIX = 'freedom-program:journals:v1:'
+const DAY_MS = 24 * 60 * 60 * 1000
+const JOURNAL_STAR_KEYS = ['financial', 'jobs', 'lessons', 'meaningfulWork']
+const WEEKLY_STAR_KEYS = ['meetings', 'books', 'lessons', 'finances']
 
 function escapeHtml(value) {
 	return String(value || '')
@@ -67,125 +59,362 @@ function formatHabitText(value) {
 	return safe.replace(/\n/g, '<br />')
 }
 
-function renderHabitTracker() {
-	const wrap = document.getElementById('habitTrackerWrap');
-	if (!wrap) return;
-	if (!session) {
-		wrap.innerHTML = '<div class="habit-gate">Log in to use the habit tracker.</div>';
-		return;
-	}
+function truncateText(value, maxLength = 90) {
+	const safe = String(value || '').trim().replace(/\s+/g, ' ')
+	if (!safe) return ''
+	return safe.length > maxLength ? `${safe.slice(0, maxLength - 1)}...` : safe
+}
 
-	let html = `<div class="habit-shell">
-		<div class="habit-header">
-			<div>
-				<div class="habit-kicker">Weekly Reflection</div>
-				<p class="habit-copy">Capture what happened this week, what you learned, and how your direction is changing over time.</p>
-			</div>
-		</div>
-		<form id="habitForm" class="habit-form">
-			<div class="habit-fields">
-				<label class="auth-label auth-label--wide">
-					<span>Week of</span>
-					<input type="date" id="habitDate" class="auth-input" required />
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Financial reflection</span>
-					<textarea id="habitFinancial" class="auth-input habit-textarea" rows="4"></textarea>
-				</label>
-				<label class="auth-label">
-					<span>Jobs held</span>
-					<textarea id="habitJobs" class="auth-input habit-textarea" rows="4"></textarea>
-				</label>
-				<label class="auth-label">
-					<span>Lessons learned</span>
-					<textarea id="habitLessons" class="auth-input habit-textarea" rows="4"></textarea>
-				</label>
-				<label class="auth-label">
-					<span>Pursuit of meaningful life work</span>
-					<textarea id="habitMeaning" class="auth-input habit-textarea" rows="4"></textarea>
-				</label>
-				<label class="auth-label">
-					<span>Strengths and weaknesses</span>
-					<textarea id="habitStrengths" class="auth-input habit-textarea" rows="4"></textarea>
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>How I'm growing each week</span>
-					<textarea id="habitGrowth" class="auth-input habit-textarea habit-textarea--large" rows="5"></textarea>
-				</label>
-			</div>
-			<div class="auth-actions">
-				<button type="submit" class="auth-btn">Save Entry</button>
-			</div>
-			<div id="habitError" class="auth-error" hidden></div>
-		</form>`;
+function toMonthInputValue(value) {
+	const ms = parseDateInputToDayMs(value)
+	const d = new Date(startOfLocalMonthMs(new Date(ms)))
+	return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
 
-	if (habitEntries.length > 0) {
-		html += '<div class="habit-list"><h3 class="habit-list-title">Past Weeks</h3>';
-		html += '<ul>' + habitEntries.map((entry) => `
-			<li class="habit-card">
-				<div class="habit-card-head">
-					<strong class="habit-card-week">${escapeHtml(entry.week)}</strong>
-					<span class="habit-card-chip">Weekly snapshot</span>
-				</div>
-				<ul class="habit-card-grid">
-					<li class="habit-card-grid-wide"><span class="habit-card-label">Financial reflection</span><div class="habit-card-text">${formatHabitText(entry.financial)}</div></li>
-					<li><span class="habit-card-label">Jobs held</span><div class="habit-card-text">${formatHabitText(entry.jobs)}</div></li>
-					<li><span class="habit-card-label">Lessons learned</span><div class="habit-card-text">${formatHabitText(entry.lessons)}</div></li>
-					<li><span class="habit-card-label">Meaningful life work</span><div class="habit-card-text">${formatHabitText(entry.meaning)}</div></li>
-					<li><span class="habit-card-label">Strengths and weaknesses</span><div class="habit-card-text">${formatHabitText(entry.strengths)}</div></li>
-					<li class="habit-card-grid-wide"><span class="habit-card-label">Growth this week</span><div class="habit-card-text">${formatHabitText(entry.growth)}</div></li>
-				</ul>
-			</li>
-		`).join('') + '</ul></div>';
-	}
+function getCurrentMonthIso() {
+	return isoDateValue(startOfLocalMonthMs(new Date()))
+}
 
-	html += '</div>'
+function getCurrentWeekIso() {
+	return isoDateValue(startOfLocalWeekMs(new Date()))
+}
 
-	wrap.innerHTML = html;
-	const form = document.getElementById('habitForm');
-	if (form) {
-		form.addEventListener('submit', (event) => {
-			event.preventDefault();
-			const week = document.getElementById('habitDate')?.value || '';
-			const financial = document.getElementById('habitFinancial')?.value || '';
-			const jobs = document.getElementById('habitJobs')?.value || '';
-			const lessons = document.getElementById('habitLessons')?.value || '';
-			const meaning = document.getElementById('habitMeaning')?.value || '';
-			const strengths = document.getElementById('habitStrengths')?.value || '';
-			const growth = document.getElementById('habitGrowth')?.value || '';
-			const errorOut = document.getElementById('habitError');
+function parseMonthInputToIso(value) {
+	const raw = String(value || '').trim()
+	if (!raw) return isoDateValue(startOfLocalMonthMs(new Date()))
+	const [y, m] = raw.split('-').map((part) => Number(part))
+	if (!Number.isFinite(y) || !Number.isFinite(m)) return isoDateValue(startOfLocalMonthMs(new Date()))
+	return isoDateValue(startOfLocalMonthMs(new Date(y, m - 1, 1)))
+}
 
-			if (!week) {
-				if (errorOut) {
-					errorOut.textContent = 'Please select a week.';
-					errorOut.hidden = false;
-				}
-				return;
-			}
+function formatMonthHeading(value) {
+	const ms = parseDateInputToDayMs(value)
+	return new Date(ms).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+}
 
-			if (errorOut) {
-				errorOut.textContent = '';
-				errorOut.hidden = true;
-			}
+function getCurrentWeekdayIndex(date = new Date()) {
+	return (new Date(date).getDay() + 6) % 7
+}
 
-			const idx = habitEntries.findIndex((entry) => entry.week === week);
-			const entry = { week, financial, jobs, lessons, meaning, strengths, growth };
-			if (idx >= 0) habitEntries[idx] = entry;
-			else habitEntries.push(entry);
-			habitEntries.sort((a, b) => b.week.localeCompare(a.week));
-			saveHabitsToLocalStorage(habitEntries);
-			updateHabitTracker();
-		});
+function createEmptyDailyWeek() {
+	return {
+		days: new Array(7).fill(null).map(() => ({
+			did: '',
+			didWell: '',
+			couldDoBetter: '',
+			checks: [false, false, false, false],
+			isStarred: false,
+			starredNote: '',
+		})),
 	}
 }
 
-function loadHabitEntries() {
-	habitEntries = session ? loadHabitsFromLocalStorage() : [];
+function getDailyWeekKey(ms = dailyReportWeekMs) {
+	return isoDateValue(startOfLocalWeekMs(new Date(ms)))
+}
+
+function getDefaultDailyFocusIndex(weekMs = dailyReportWeekMs) {
+	const safeWeekMs = startOfLocalWeekMs(new Date(weekMs))
+	const currentWeekMs = startOfLocalWeekMs(new Date())
+	return safeWeekMs === currentWeekMs ? getCurrentWeekdayIndex(new Date()) : 0
+}
+
+function setDailyReportWeek(weekMs) {
+	dailyReportWeekMs = startOfLocalWeekMs(new Date(weekMs))
+	dailyReportDayIndex = getDefaultDailyFocusIndex(dailyReportWeekMs)
+}
+
+function createEmptyStarredSections(keys) {
+	return Object.fromEntries(keys.map((key) => [key, { active: false, note: '' }]))
+}
+
+function sanitizeStarredSections(value, keys) {
+	const base = createEmptyStarredSections(keys)
+	for (const key of keys) {
+		base[key] = {
+			active: Boolean(value?.[key]?.active),
+			note: sanitizeLongText(value?.[key]?.note || '', 180),
+		}
+	}
+	return base
+}
+
+function hasActiveStarredSections(starredSections) {
+	return Object.values(starredSections || {}).some((section) => Boolean(section?.active))
+}
+
+function countActiveStarredSections(starredSections) {
+	return Object.values(starredSections || {}).filter((section) => Boolean(section?.active)).length
+}
+
+function readStarredSection(buttonId) {
+	return {
+		active: Boolean(document.getElementById(buttonId)?.classList.contains('star-toggle--active')),
+		note: '',
+	}
+}
+
+function bindStarToggleButtons(root) {
+	root?.querySelectorAll?.('[data-star-toggle]')?.forEach((node) => {
+		node.addEventListener('click', (event) => {
+			event.preventDefault()
+			const button = /** @type {HTMLButtonElement} */ (event.currentTarget)
+			const next = !button.classList.contains('star-toggle--active')
+			button.classList.toggle('star-toggle--active', next)
+			button.textContent = next ? (button.dataset.activeLabel || 'Starred') : (button.dataset.inactiveLabel || 'Star')
+		})
+	})
+}
+
+function getRendererAppStateSnapshot() {
+	return {
+		profileSettings,
+		habitBoardState,
+		weeklyReports,
+		journalEntries,
+		ledgerEntryMetaByClientId,
+	}
+}
+
+async function persistDesktopRendererState() {
+	if (!isDesktopApp || !session || !desktop?.appState?.setRendererState) return
+	try {
+		await desktop.appState.setRendererState(getRendererAppStateSnapshot())
+	} catch {
+		// ignore desktop persistence failures for now
+	}
+}
+
+function formatWeekRangeLabel(weekMs) {
+	const safeWeekMs = startOfLocalWeekMs(new Date(weekMs))
+	return `${formatShortDate(safeWeekMs)} - ${formatShortDate(safeWeekMs + (6 * DAY_MS))}`
+}
+
+function getDailyWeekState(weekKey = getDailyWeekKey()) {
+	const safeState = sanitizeHabitBoardState(habitBoardState)
+	return safeState.weeksByKey[weekKey] || createEmptyDailyWeek()
+}
+
+function setDailyWeekState(weekKey, weekState) {
+	const nextState = sanitizeHabitBoardState(habitBoardState)
+	nextState.weeksByKey[weekKey] = createEmptyDailyWeek()
+	for (let index = 0; index < 7; index += 1) {
+		const day = weekState?.days?.[index] || {}
+		const checks = Array.isArray(day?.checks) ? day.checks.slice(0, 4).map(Boolean) : [false, false, false, false]
+		while (checks.length < 4) checks.push(false)
+		nextState.weeksByKey[weekKey].days[index] = {
+			did: sanitizeLongText(day?.did || '', 240),
+			didWell: sanitizeLongText(day?.didWell || '', 240),
+			couldDoBetter: sanitizeLongText(day?.couldDoBetter || '', 240),
+			checks,
+			isStarred: Boolean(day?.isStarred),
+			starredNote: '',
+		}
+	}
+	saveHabitBoardToStorage(nextState)
+}
+
+function renderHabitTracker() {
+    const wrap = document.getElementById('habitTrackerWrap')
+	if (!wrap) return
+	if (!session) {
+		wrap.innerHTML = '<div class="habit-gate">Log in to use your journal.</div>'
+		return
+	}
+	const latest = getCurrentJournalEntry()
+	let html = `<div class="report-shell">
+		<div class="report-header report-header--journal">
+			<div>
+				<div class="habit-kicker">Monthly Report</div>
+				<h3 class="report-title">Freedom Program: Journal</h3>
+				<p class="habit-copy">Use the monthly page from the book to track financial progress, jobs held, lessons learned, and your pursuit of meaningful life work.</p>
+			</div>
+			<div class="report-date-pill">${escapeHtml(formatMonthHeading(latest.month))}</div>
+		</div>
+		<form id="journalForm" class="habit-form report-form">
+			<div class="report-block report-block--full">
+				<div class="report-block-head"><div class="report-block-title">Financial</div><button type="button" id="journalStarFinancial" data-star-toggle data-inactive-label="Star financial" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.financial?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.financial?.active ? 'Starred' : 'Star financial'}</button></div>
+				<div class="habit-fields report-fields report-fields--financial report-fields--journal-financial">
+					<div class="report-financial-row">
+						<div class="report-stamp"><span>Month</span><strong>${escapeHtml(formatMonthHeading(latest.month))}</strong></div>
+						<label class="auth-label">
+							<span>Own</span>
+							<input type="number" id="journalOwn" class="auth-input" min="0" step="1" value="${latest.own}" />
+						</label>
+						<label class="auth-label">
+							<span>Owe</span>
+							<input type="number" id="journalOwe" class="auth-input" min="0" step="1" value="${latest.owe}" />
+						</label>
+					</div>
+					<label class="auth-label auth-label--wide">
+						<span>My progress this month</span>
+						<textarea id="journalFinancialProgress" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.financialProgress)}</textarea>
+					</label>
+					<label class="auth-label">
+						<span>I am ahead or behind</span>
+						<input id="journalAheadBehind" class="auth-input" maxlength="60" value="${escapeHtml(latest.aheadBehind)}" />
+					</label>
+					<label class="auth-label auth-label--wide">
+						<span>My goal this month</span>
+						<textarea id="journalGoalThisMonth" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.goalThisMonth)}</textarea>
+					</label>
+				</div>
+			</div>
+			<div class="report-columns">
+				<div class="report-block">
+					<div class="report-block-head"><div class="report-block-title">Jobs Held</div><button type="button" id="journalStarJobs" data-star-toggle data-inactive-label="Star jobs" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.jobs?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.jobs?.active ? 'Starred' : 'Star jobs'}</button></div>
+					<div class="habit-fields report-fields">
+						<label class="auth-label auth-label--wide"><span>Primary job</span><input id="journalPrimaryJob" class="auth-input" maxlength="120" value="${escapeHtml(latest.primaryJob)}" /></label>
+						<label class="auth-label auth-label--wide"><span>Secondary job</span><input id="journalSecondaryJob" class="auth-input" maxlength="120" value="${escapeHtml(latest.secondaryJob)}" /></label>
+						<label class="auth-label auth-label--wide"><span>Volunteer opportunities</span><textarea id="journalVolunteerOpportunities" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.volunteerOpportunities)}</textarea></label>
+					</div>
+				</div>
+				<div class="report-block">
+					<div class="report-block-head"><div class="report-block-title">Lessons Learned</div><button type="button" id="journalStarLessons" data-star-toggle data-inactive-label="Star lessons" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.lessons?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.lessons?.active ? 'Starred' : 'Star lessons'}</button></div>
+					<div class="habit-fields report-fields">
+						<label class="auth-label auth-label--wide"><span>Reading</span><textarea id="journalReading" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.reading)}</textarea></label>
+						<label class="auth-label auth-label--wide"><span>Meetings</span><textarea id="journalMeetings" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.meetings)}</textarea></label>
+						<label class="auth-label auth-label--wide"><span>Classes or videos or podcasts</span><textarea id="journalClasses" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.classes)}</textarea></label>
+					</div>
+				</div>
+			</div>
+			<div class="report-block report-block--full">
+				<div class="report-block-head"><div class="report-block-title">My pursuit of meaningful life work</div><button type="button" id="journalStarMeaningfulWork" data-star-toggle data-inactive-label="Star life work" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.meaningfulWork?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.meaningfulWork?.active ? 'Starred' : 'Star life work'}</button></div>
+				<div class="habit-fields report-fields">
+					<label class="auth-label auth-label--wide"><span>What job is paying the bills</span><textarea id="journalBillingJob" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.billingJob)}</textarea></label>
+					<label class="auth-label auth-label--wide"><span>What interests I've discovered</span><textarea id="journalInterests" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.interests)}</textarea></label>
+					<label class="auth-label auth-label--wide"><span>What I'm enjoying</span><textarea id="journalEnjoying" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.enjoying)}</textarea></label>
+					<label class="auth-label auth-label--wide"><span>How my interests could help people</span><textarea id="journalHelpPeople" class="auth-input habit-textarea" rows="2">${escapeHtml(latest.helpPeople)}</textarea></label>
+				</div>
+			</div>
+			<div class="auth-actions">
+				<button type="submit" class="auth-btn">Save Journal</button>
+			</div>
+			<div id="journalError" class="auth-error" hidden></div>
+		</form>`
+	if (journalEntries.length > 0) {
+		html += `<div class="habit-list"><h3 class="habit-list-title">Past Monthly Journals</h3><ul>${journalEntries.map((entry) => `<li class="habit-card"><div class="habit-card-head"><strong class="habit-card-week">${escapeHtml(formatMonthHeading(entry.month))}</strong><div class="habit-card-chip-row"><span class="habit-card-chip">Net worth ${formatSignedDollars(entry.own - entry.owe)}</span>${countActiveStarredSections(entry.starredSections) ? `<span class="habit-card-chip">${countActiveStarredSections(entry.starredSections)} starred</span>` : ''}</div></div><ul class="habit-card-grid"><li><span class="habit-card-label">Progress</span><div class="habit-card-text">${formatHabitText(entry.financialProgress)}</div></li><li><span class="habit-card-label">Goal this month</span><div class="habit-card-text">${formatHabitText(entry.goalThisMonth)}</div></li><li><span class="habit-card-label">Jobs held</span><div class="habit-card-text">${formatHabitText([entry.primaryJob, entry.secondaryJob].filter(Boolean).join('\n'))}</div></li><li><span class="habit-card-label">Meaningful life work</span><div class="habit-card-text">${formatHabitText(entry.billingJob)}</div></li></ul></li>`).join('')}</ul></div>`
+	}
+	html += '</div>'
+	wrap.innerHTML = html
+	bindStarToggleButtons(document.getElementById('journalForm'))
+	document.getElementById('journalForm')?.addEventListener('submit', (event) => {
+		event.preventDefault()
+		const errorOut = document.getElementById('journalError')
+		const starredSections = {
+			financial: readStarredSection('journalStarFinancial'),
+			jobs: readStarredSection('journalStarJobs'),
+			lessons: readStarredSection('journalStarLessons'),
+			meaningfulWork: readStarredSection('journalStarMeaningfulWork'),
+		}
+		const entry = sanitizeJournalEntry({
+			month: getCurrentMonthIso(),
+			own: document.getElementById('journalOwn')?.value,
+			owe: document.getElementById('journalOwe')?.value,
+			financialProgress: document.getElementById('journalFinancialProgress')?.value,
+			aheadBehind: document.getElementById('journalAheadBehind')?.value,
+			goalThisMonth: document.getElementById('journalGoalThisMonth')?.value,
+			primaryJob: document.getElementById('journalPrimaryJob')?.value,
+			secondaryJob: document.getElementById('journalSecondaryJob')?.value,
+			volunteerOpportunities: document.getElementById('journalVolunteerOpportunities')?.value,
+			reading: document.getElementById('journalReading')?.value,
+			meetings: document.getElementById('journalMeetings')?.value,
+			classes: document.getElementById('journalClasses')?.value,
+			billingJob: document.getElementById('journalBillingJob')?.value,
+			interests: document.getElementById('journalInterests')?.value,
+			enjoying: document.getElementById('journalEnjoying')?.value,
+			helpPeople: document.getElementById('journalHelpPeople')?.value,
+			isStarred: hasActiveStarredSections(starredSections),
+			starredNote: '',
+			starredSections,
+		})
+		const nextEntries = journalEntries.slice()
+		const idx = nextEntries.findIndex((item) => item.month === entry.month)
+		if (idx >= 0) nextEntries[idx] = entry
+		else nextEntries.push(entry)
+		saveJournalEntriesToStorage(nextEntries)
+		if (errorOut) {
+			errorOut.hidden = true
+			errorOut.textContent = ''
+		}
+		updateHabitTracker()
+	})
+}
+
+function renderWeeklyReport() {
+	const wrap = document.getElementById('weeklyReportWrap')
+	if (!wrap) return
+	if (!session) {
+		wrap.innerHTML = '<div class="habit-gate">Log in to use the weekly report.</div>'
+		return
+	}
+	const latest = getCurrentWeeklyReportEntry()
+	const margin = latest.incomeJob1 + latest.incomeJob2 - latest.expenses
+	let html = `<div class="report-shell"><div class="report-header"><div><div class="habit-kicker">Weekly Report</div><h3 class="report-title">Weekly Report</h3><p class="habit-copy">Track meetings, books, lessons, and the weekly finance snapshot from the book.</p></div><div class="report-date-pill">Week of ${escapeHtml(formatDateLabel(latest.week))}</div></div><form id="weeklyReportForm" class="habit-form report-form"><div class="report-columns"><div class="report-block"><div class="report-block-head"><div class="report-block-title">Meeting</div><button type="button" id="weeklyStarMeetings" data-star-toggle data-inactive-label="Star meetings" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.meetings?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.meetings?.active ? 'Starred' : 'Star meetings'}</button></div><div class="habit-fields report-fields"><label class="auth-label auth-label--wide"><span>Who</span><input id="weeklyMeetingWho1" class="auth-input" maxlength="120" value="${escapeHtml(latest.meetingWho1)}" /></label><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyMeetingLearned1" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.meetingLearned1)}</textarea></label><label class="auth-label auth-label--wide"><span>Who</span><input id="weeklyMeetingWho2" class="auth-input" maxlength="120" value="${escapeHtml(latest.meetingWho2)}" /></label><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyMeetingLearned2" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.meetingLearned2)}</textarea></label></div></div><div class="report-block"><div class="report-block-head"><div class="report-block-title">Books</div><button type="button" id="weeklyStarBooks" data-star-toggle data-inactive-label="Star books" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.books?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.books?.active ? 'Starred' : 'Star books'}</button></div><div class="habit-fields report-fields report-fields--books"><div class="report-stamp"><span>Week of</span><strong>${escapeHtml(formatDateLabel(latest.week))}</strong></div><div class="report-book-row"><label class="auth-label"><span>Book</span><input id="weeklyBook1" class="auth-input" maxlength="120" value="${escapeHtml(latest.book1)}" /></label><label class="auth-label"><span>Chapter</span><input id="weeklyBook1Chapter" class="auth-input" maxlength="60" value="${escapeHtml(latest.book1Chapter)}" /></label></div><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyBook1Learned" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.book1Learned)}</textarea></label><div class="report-book-row report-book-row--offset"><label class="auth-label"><span>Book</span><input id="weeklyBook2" class="auth-input" maxlength="120" value="${escapeHtml(latest.book2)}" /></label><label class="auth-label"><span>Chapter</span><input id="weeklyBook2Chapter" class="auth-input" maxlength="60" value="${escapeHtml(latest.book2Chapter)}" /></label></div><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyBook2Learned" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.book2Learned)}</textarea></label></div></div></div><div class="report-columns"><div class="report-block"><div class="report-block-head"><div class="report-block-title">Podcast, Videos, or Other Lessons</div><button type="button" id="weeklyStarLessons" data-star-toggle data-inactive-label="Star lessons" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.lessons?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.lessons?.active ? 'Starred' : 'Star lessons'}</button></div><div class="habit-fields report-fields"><label class="auth-label auth-label--wide"><span>Title</span><input id="weeklyLessonTitle1" class="auth-input" maxlength="120" value="${escapeHtml(latest.lessonTitle1)}" /></label><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyLessonLearned1" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.lessonLearned1)}</textarea></label><label class="auth-label auth-label--wide"><span>Title</span><input id="weeklyLessonTitle2" class="auth-input" maxlength="120" value="${escapeHtml(latest.lessonTitle2)}" /></label><label class="auth-label auth-label--wide"><span>What I learned</span><textarea id="weeklyLessonLearned2" class="auth-input habit-textarea" rows="3">${escapeHtml(latest.lessonLearned2)}</textarea></label></div></div><div class="report-block report-quote"><div class="report-block-title">Weekly Thought</div><p>Sinful pride is self-promoting, self-reliant, and self-exalting.</p><p>Deep satisfaction is the natural and proper fruit of a job well done.</p><p>Do the work well and keep the focus on growth rather than self-promotion.</p></div></div><div class="report-block report-block--full"><div class="report-block-head"><div class="report-block-title">Finances</div><button type="button" id="weeklyStarFinances" data-star-toggle data-inactive-label="Star finances" data-active-label="Starred" class="star-toggle star-toggle--compact ${latest.starredSections?.finances?.active ? 'star-toggle--active' : ''}">${latest.starredSections?.finances?.active ? 'Starred' : 'Star finances'}</button></div><div class="habit-fields report-fields report-fields--financial"><label class="auth-label"><span>Income Job 1</span><input type="number" id="weeklyIncomeJob1" class="auth-input" min="0" step="1" value="${latest.incomeJob1}" /></label><label class="auth-label"><span>Income Job 2</span><input type="number" id="weeklyIncomeJob2" class="auth-input" min="0" step="1" value="${latest.incomeJob2}" /></label><label class="auth-label"><span>Expenses</span><input type="number" id="weeklyReportExpenses" class="auth-input" min="0" step="1" value="${latest.expenses}" /></label><div class="report-margin"><span>Margin</span><strong id="weeklyMarginValue">${formatSignedDollars(margin)}</strong></div></div></div><div class="auth-actions"><button type="submit" class="auth-btn">Save Weekly Report</button></div><div id="weeklyReportError" class="auth-error" hidden></div></form>`
+	if (weeklyReports.length > 0) {
+		html += `<div class="habit-list"><h3 class="habit-list-title">Past Weekly Reports</h3><ul>${weeklyReports.map((entry) => `<li class="habit-card"><div class="habit-card-head"><strong class="habit-card-week">Week of ${escapeHtml(formatDateLabel(entry.week))}</strong><div class="habit-card-chip-row"><span class="habit-card-chip">Margin ${formatSignedDollars(entry.incomeJob1 + entry.incomeJob2 - entry.expenses)}</span>${countActiveStarredSections(entry.starredSections) ? `<span class="habit-card-chip">${countActiveStarredSections(entry.starredSections)} starred</span>` : ''}</div></div><ul class="habit-card-grid"><li><span class="habit-card-label">Meetings</span><div class="habit-card-text">${formatHabitText([entry.meetingWho1 && `Who: ${entry.meetingWho1}`, entry.meetingLearned1, entry.meetingWho2 && `Who: ${entry.meetingWho2}`, entry.meetingLearned2].filter(Boolean).join('\n'))}</div></li><li><span class="habit-card-label">Books</span><div class="habit-card-text">${formatHabitText([entry.book1 && `${entry.book1} (${entry.book1Chapter})`, entry.book1Learned, entry.book2 && `${entry.book2} (${entry.book2Chapter})`, entry.book2Learned].filter(Boolean).join('\n'))}</div></li><li class="habit-card-grid-wide"><span class="habit-card-label">Lessons</span><div class="habit-card-text">${formatHabitText([entry.lessonTitle1 && `${entry.lessonTitle1}: ${entry.lessonLearned1}`, entry.lessonTitle2 && `${entry.lessonTitle2}: ${entry.lessonLearned2}`].filter(Boolean).join('\n'))}</div></li></ul></li>`).join('')}</ul></div>`
+	}
+	html += '</div>'
+	wrap.innerHTML = html
+	const weeklyReportForm = document.getElementById('weeklyReportForm')
+	bindStarToggleButtons(weeklyReportForm)
+	const updateWeeklyMargin = () => {
+		const income1 = Number(document.getElementById('weeklyIncomeJob1')?.value || 0)
+		const income2 = Number(document.getElementById('weeklyIncomeJob2')?.value || 0)
+		const expenses = Number(document.getElementById('weeklyReportExpenses')?.value || 0)
+		const marginOut = document.getElementById('weeklyMarginValue')
+		if (marginOut) marginOut.textContent = formatSignedDollars(income1 + income2 - expenses)
+	}
+	weeklyReportForm?.addEventListener('input', (event) => {
+		const target = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (event.target)
+		if (!target) return
+		if (target.id === 'weeklyIncomeJob1' || target.id === 'weeklyIncomeJob2' || target.id === 'weeklyReportExpenses') updateWeeklyMargin()
+	})
+	weeklyReportForm?.addEventListener('submit', (event) => {
+		event.preventDefault()
+		const starredSections = {
+			meetings: readStarredSection('weeklyStarMeetings'),
+			books: readStarredSection('weeklyStarBooks'),
+			lessons: readStarredSection('weeklyStarLessons'),
+			finances: readStarredSection('weeklyStarFinances'),
+		}
+		const entry = sanitizeWeeklyReportEntry({
+			week: getCurrentWeekIso(),
+			meetingWho1: document.getElementById('weeklyMeetingWho1')?.value,
+			meetingLearned1: document.getElementById('weeklyMeetingLearned1')?.value,
+			meetingWho2: document.getElementById('weeklyMeetingWho2')?.value,
+			meetingLearned2: document.getElementById('weeklyMeetingLearned2')?.value,
+			book1: document.getElementById('weeklyBook1')?.value,
+			book1Chapter: document.getElementById('weeklyBook1Chapter')?.value,
+			book1Learned: document.getElementById('weeklyBook1Learned')?.value,
+			book2: document.getElementById('weeklyBook2')?.value,
+			book2Chapter: document.getElementById('weeklyBook2Chapter')?.value,
+			book2Learned: document.getElementById('weeklyBook2Learned')?.value,
+			lessonTitle1: document.getElementById('weeklyLessonTitle1')?.value,
+			lessonLearned1: document.getElementById('weeklyLessonLearned1')?.value,
+			lessonTitle2: document.getElementById('weeklyLessonTitle2')?.value,
+			lessonLearned2: document.getElementById('weeklyLessonLearned2')?.value,
+			incomeJob1: document.getElementById('weeklyIncomeJob1')?.value,
+			incomeJob2: document.getElementById('weeklyIncomeJob2')?.value,
+			expenses: document.getElementById('weeklyReportExpenses')?.value,
+			isStarred: hasActiveStarredSections(starredSections),
+			starredNote: '',
+			starredSections,
+		})
+		const nextEntries = weeklyReports.slice()
+		const idx = nextEntries.findIndex((item) => item.week === entry.week)
+		if (idx >= 0) nextEntries[idx] = entry
+		else nextEntries.push(entry)
+		saveWeeklyReportsToStorage(nextEntries)
+		renderWeeklyReport()
+		showHabitPopups()
+	})
 }
 
 // Insert the habit tracker panel into the habits page
 window.addEventListener('DOMContentLoaded', () => {
 	updateHabitTracker();
+	renderWeeklyReport();
 });
 
 // Show habit popups on dashboard
@@ -193,28 +422,41 @@ function showHabitPopups() {
 	const container = document.getElementById('habitPopupContainer');
 	if (!container) return;
 	container.innerHTML = '';
-	if (!session || !habitEntries.length) return;
-	// Show the most recent entry
-	const latest = habitEntries[0];
+	if (!session || !weeklyReports.length) return;
+	const latest = weeklyReports[0];
+	const margin = latest.incomeJob1 + latest.incomeJob2 - latest.expenses
 	const popup = document.createElement('div');
 	popup.className = 'habit-popup';
 	popup.innerHTML = `
 		<div class="habit-popup-inner">
 			<div class="habit-popup-head">
-				<strong>Latest Habit Entry</strong>
-				<span class="habit-popup-week">${escapeHtml(latest.week)}</span>
+				<strong>Latest Weekly Report</strong>
+				<span class="habit-popup-week">${escapeHtml(formatDateLabel(latest.week))}</span>
 			</div>
 			<div class="habit-popup-grid">
-				<div class="habit-popup-grid-wide"><span class="habit-card-label">Financial reflection</span><div class="habit-card-text">${formatHabitText(latest.financial)}</div></div>
-				<div><span class="habit-card-label">Jobs held</span><div class="habit-card-text">${formatHabitText(latest.jobs)}</div></div>
-				<div><span class="habit-card-label">Lessons learned</span><div class="habit-card-text">${formatHabitText(latest.lessons)}</div></div>
-				<div><span class="habit-card-label">Meaningful life work</span><div class="habit-card-text">${formatHabitText(latest.meaning)}</div></div>
-				<div><span class="habit-card-label">Strengths and weaknesses</span><div class="habit-card-text">${formatHabitText(latest.strengths)}</div></div>
-				<div class="habit-popup-grid-wide"><span class="habit-card-label">Growth this week</span><div class="habit-card-text">${formatHabitText(latest.growth)}</div></div>
+				<div><span class="habit-card-label">Meeting</span><div class="habit-card-text">${formatHabitText([latest.meetingWho1 && `Who: ${latest.meetingWho1}`, latest.meetingLearned1].filter(Boolean).join('\n'))}</div></div>
+				<div><span class="habit-card-label">Books</span><div class="habit-card-text">${formatHabitText([latest.book1 && `${latest.book1} (${latest.book1Chapter})`, latest.book1Learned].filter(Boolean).join('\n'))}</div></div>
+				<div class="habit-popup-grid-wide"><span class="habit-card-label">Lessons</span><div class="habit-card-text">${formatHabitText([latest.lessonTitle1 && `${latest.lessonTitle1}: ${latest.lessonLearned1}`, latest.lessonTitle2 && `${latest.lessonTitle2}: ${latest.lessonLearned2}`].filter(Boolean).join('\n'))}</div></div>
+				<div><span class="habit-card-label">Income</span><div class="habit-card-text">${formatDollars(latest.incomeJob1 + latest.incomeJob2)}</div></div>
+				<div><span class="habit-card-label">Margin</span><div class="habit-card-text">${formatSignedDollars(margin)}</div></div>
 			</div>
 		</div>
 	`;
 	container.appendChild(popup);
+}
+
+function renderStarredHighlights() {
+	if (!starredHighlightsWrap) return
+	if (!session) {
+		starredHighlightsWrap.innerHTML = ''
+		return
+	}
+	const highlights = getStarredHighlights()
+	if (!highlights.length) {
+		starredHighlightsWrap.innerHTML = '<div class="starred-panel"><div class="starred-panel-title">Starred Highlights</div><div class="breakdown-empty">Star a day, week, or month entry to pin it here.</div></div>'
+		return
+	}
+	starredHighlightsWrap.innerHTML = `<div class="starred-panel"><div class="starred-panel-title">Starred Highlights</div><div class="starred-list">${highlights.map((item) => `<article class="starred-item"><div class="starred-item-head"><span class="habit-card-chip">${escapeHtml(item.kind)}</span><strong>${escapeHtml(item.label)}</strong></div><div class="starred-item-summary">${formatHabitText(item.summary || 'Starred item')}</div></article>`).join('')}</div></div>`
 }
 
 // Patch updateHabitTracker to also show popups
@@ -222,11 +464,11 @@ const origUpdateHabitTracker = updateHabitTracker;
 updateHabitTracker = function() {
 	origUpdateHabitTracker.apply(this, arguments);
 	showHabitPopups();
+	renderStarredHighlights();
 };
 
 // Render habit tracker on session change
 function updateHabitTracker() {
-	loadHabitEntries();
 	renderHabitTracker();
 }
 
@@ -235,10 +477,10 @@ const origUpdateAuthUi = updateAuthUi;
 updateAuthUi = function() {
 	origUpdateAuthUi.apply(this, arguments);
 	updateHabitTracker();
+	renderWeeklyReport();
+	renderHabitBoard();
+	renderSettingsPanel();
 };
-
-// Initial render if script loads after DOMContentLoaded
-if (document.readyState !== 'loading') updateHabitTracker();
 
 app.innerHTML = `
 	<div class="shell">
@@ -247,8 +489,11 @@ app.innerHTML = `
 				<div class="topbar-brand">The Freedom Program</div>
 				<nav class="topbar-nav" aria-label="Primary">
 					<a class="topbar-link" href="#dashboard">Dashboard</a>
-					<a class="topbar-link" href="#details">Details</a>
+					<a class="topbar-link" href="#details">Financial</a>
+					<a class="topbar-link" href="#journal">Journal</a>
+					<a class="topbar-link" href="#weekly">Weekly Report</a>
 					<a class="topbar-link" href="#habits">Habits</a>
+					<a class="topbar-link" href="#settings">Settings</a>
 				</nav>
 			</div>
 		</header>
@@ -282,19 +527,16 @@ app.innerHTML = `
 						<div class="auth-profile-label">Name</div>
 						<div class="auth-profile-value" id="profileCurrentName">No name set</div>
 					</div>
-					<button class="auth-btn auth-btn--secondary" id="profileEditBtn" type="button">Edit name</button>
-				</div>
-				<form class="auth-profile" id="profileForm" hidden>
-					<label class="auth-label auth-label--wide">
-						<span>Name</span>
-						<input id="profileName" class="auth-input" type="text" autocomplete="name" maxlength="120" />
-					</label>
-					<div class="auth-actions">
-						<button class="auth-btn auth-btn--secondary" id="profileSaveBtn" type="submit">Save name</button>
-						<button class="auth-btn auth-btn--ghost" id="profileCancelBtn" type="button">Cancel</button>
+					<div class="auth-profile-copy">
+						<div class="auth-profile-label">Email</div>
+						<div class="auth-profile-value" id="profileCurrentEmail">No email set</div>
 					</div>
-					<div class="auth-error" id="profileError" role="status" aria-live="polite" hidden></div>
-				</form>
+					<div class="auth-profile-copy auth-profile-copy--wide">
+						<div class="auth-profile-label">Contact Info</div>
+						<div class="auth-profile-value auth-profile-value--body" id="profileCurrentContact">Add contact info in Settings.</div>
+					</div>
+					<div class="auth-profile-note">Edit name, email, and contact info in Settings.</div>
+				</div>
 				<form class="auth-form" id="authForm" autocomplete="on">
 					<label class="auth-label" id="authNameField" hidden>
 						<span>Name</span>
@@ -388,18 +630,52 @@ app.innerHTML = `
 					</div>
 				</div>
 
+				<div class="goal-plan" aria-label="Savings goal timeline and weekly target">
+					<div class="summary-grid summary-grid--compact">
+						<div class="metric" aria-label="Goal start date">
+							<div class="metric-label">Start Date</div>
+							<div class="metric-value metric-value--small" id="goalStartDate">--</div>
+						</div>
+						<div class="metric" aria-label="Goal end date">
+							<div class="metric-label">End Date</div>
+							<div class="metric-value metric-value--small" id="goalEndDate">--</div>
+						</div>
+						<div class="metric" aria-label="Weekly target needed to hit goal">
+							<div class="metric-label">Needed Per Week</div>
+							<div class="metric-value metric-value--small" id="goalWeeklyTarget">$0</div>
+							<div class="metric-note" id="goalWeeklyCopy">Set a timeline in Settings.</div>
+						</div>
+					</div>
+				</div>
+
 				<!-- Habit popups -->
 				<div id="habitPopupContainer"></div>
+				<div id="starredHighlightsWrap"></div>
 			</div>
+		</section>
+
+		<section class="panel" id="journal" aria-label="Journal" hidden>
+			<h2>Journal</h2>
+			<div id="habitTrackerWrap"></div>
+		</section>
+
+		<section class="panel" id="weekly" aria-label="Weekly Report" hidden>
+			<h2>Weekly Report</h2>
+			<div id="weeklyReportWrap"></div>
 		</section>
 
 		<section class="panel" id="habits" aria-label="Habit Tracker" hidden>
 			<h2>Habit Tracker</h2>
-			<div id="habitTrackerWrap"></div>
+			<div id="habitBoardWrap"></div>
 		</section>
 
-		<section class="panel" id="details" aria-label="Income, expenses, and savings details" hidden>
-			<h2>Details</h2>
+		<section class="panel" id="settings" aria-label="Settings" hidden>
+			<h2>Settings</h2>
+			<div id="settingsWrap"></div>
+		</section>
+
+		<section class="panel" id="details" aria-label="Financial" hidden>
+			<h2>Financial</h2>
 			<div class="details-toolbar" aria-label="Period controls">
 				<label class="auth-label">
 					<span>View</span>
@@ -436,6 +712,17 @@ app.innerHTML = `
 				</div>
 			</div>
 
+			<div class="details-split" aria-label="Breakdowns for this period">
+				<div class="breakdown-panel">
+					<h3 class="breakdown-title">Savings Funds</h3>
+					<div id="fundSummary"></div>
+				</div>
+				<div class="breakdown-panel">
+					<h3 class="breakdown-title">Recent Entries</h3>
+					<div id="entryFeed"></div>
+				</div>
+			</div>
+
 			<div class="chart" aria-label="Income, expenses, and savings chart">
 				<canvas
 					id="detailChart"
@@ -460,12 +747,56 @@ app.innerHTML = `
 					<input id="entryIncome" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Income in dollars" />
 				</label>
 				<label class="auth-label">
+					<span>Income source</span>
+					<input id="entryIncomeSource" class="auth-input" type="text" maxlength="120" placeholder="Paycheck, side job, gift" aria-label="Income source" />
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Income note</span>
+					<input id="entryIncomeNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the income" aria-label="Income note" />
+				</label>
+				<label class="auth-label">
 					<span>Expenses ($)</span>
 					<input id="entryExpenses" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Expenses in dollars" />
 				</label>
 				<label class="auth-label">
+					<span>Expense category</span>
+					<select id="entryExpenseCategory" class="auth-input" aria-label="Expense category">
+						<option value="Housing">Housing</option>
+						<option value="Transportation">Transportation</option>
+						<option value="Food">Food</option>
+						<option value="Utilities">Utilities</option>
+						<option value="Health">Health</option>
+						<option value="Education">Education</option>
+						<option value="Other">Other</option>
+					</select>
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Expense note</span>
+					<input id="entryExpenseNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the expense" aria-label="Expense note" />
+				</label>
+				<label class="auth-label">
 					<span>Savings ($)</span>
 					<input id="entrySavings" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Savings in dollars" />
+				</label>
+				<label class="auth-label">
+					<span>E-Fund ($)</span>
+					<input id="entryFundEmergency" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Emergency fund amount" />
+				</label>
+				<label class="auth-label">
+					<span>Car Fund ($)</span>
+					<input id="entryFundCar" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Car fund amount" />
+				</label>
+				<label class="auth-label">
+					<span>Next Big Fund ($)</span>
+					<input id="entryFundNextBig" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Next big fund amount" />
+				</label>
+				<label class="auth-label">
+					<span>Other fund name</span>
+					<input id="entryFundOtherName" class="auth-input" type="text" maxlength="60" placeholder="Travel, school, tools" aria-label="Other fund name" />
+				</label>
+				<label class="auth-label">
+					<span>Other fund amount ($)</span>
+					<input id="entryFundOtherAmount" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Other fund amount" />
 				</label>
 				<div class="auth-actions">
 					<button class="auth-btn" id="entryAddBtn" type="submit">Add entry</button>
@@ -483,10 +814,16 @@ const valueOut = /** @type {HTMLOutputElement} */ (document.querySelector('#rock
 const rocket = /** @type {HTMLDivElement} */ (document.querySelector('#rocket'))
 const goalEditBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#goalEditBtn'))
 const goalSliderHint = /** @type {HTMLDivElement} */ (document.querySelector('#goalSliderHint'))
+const goalStartDateOut = /** @type {HTMLDivElement} */ (document.querySelector('#goalStartDate'))
+const goalEndDateOut = /** @type {HTMLDivElement} */ (document.querySelector('#goalEndDate'))
+const goalWeeklyTargetOut = /** @type {HTMLDivElement} */ (document.querySelector('#goalWeeklyTarget'))
+const goalWeeklyCopyOut = /** @type {HTMLDivElement} */ (document.querySelector('#goalWeeklyCopy'))
 
 const detailChartCanvas = /** @type {HTMLCanvasElement} */ (document.querySelector('#detailChart'))
 const detailTooltip = /** @type {HTMLDivElement} */ (document.querySelector('#detailTooltip'))
 const detailRange = /** @type {HTMLSpanElement} */ (document.querySelector('#detailRange'))
+const fundSummaryWrap = /** @type {HTMLDivElement} */ (document.querySelector('#fundSummary'))
+const entryFeedWrap = /** @type {HTMLDivElement} */ (document.querySelector('#entryFeed'))
 
 const detailKindSelect = /** @type {HTMLSelectElement} */ (document.querySelector('#detailKind'))
 const detailDateInput = /** @type {HTMLInputElement} */ (document.querySelector('#detailDate'))
@@ -500,10 +837,22 @@ const detailSavingsTotalOut = /** @type {HTMLDivElement} */ (document.querySelec
 const entryForm = /** @type {HTMLFormElement} */ (document.querySelector('#entryForm'))
 const entryDateInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryDate'))
 const entryIncomeInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryIncome'))
+const entryIncomeSourceInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryIncomeSource'))
+const entryIncomeNoteInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryIncomeNote'))
 const entryExpensesInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryExpenses'))
+const entryExpenseCategoryInput = /** @type {HTMLSelectElement} */ (document.querySelector('#entryExpenseCategory'))
+const entryExpenseNoteInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryExpenseNote'))
 const entrySavingsInput = /** @type {HTMLInputElement} */ (document.querySelector('#entrySavings'))
+const entryFundEmergencyInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryFundEmergency'))
+const entryFundCarInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryFundCar'))
+const entryFundNextBigInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryFundNextBig'))
+const entryFundOtherNameInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryFundOtherName'))
+const entryFundOtherAmountInput = /** @type {HTMLInputElement} */ (document.querySelector('#entryFundOtherAmount'))
 const entryAddBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#entryAddBtn'))
 const entryError = /** @type {HTMLDivElement} */ (document.querySelector('#entryError'))
+const habitBoardWrap = /** @type {HTMLDivElement} */ (document.querySelector('#habitBoardWrap'))
+const weeklyReportWrap = /** @type {HTMLDivElement} */ (document.querySelector('#weeklyReportWrap'))
+const settingsWrap = /** @type {HTMLDivElement} */ (document.querySelector('#settingsWrap'))
 
 const authWrap = /** @type {HTMLDivElement} */ (document.querySelector('#authWrap'))
 const authStatus = /** @type {HTMLDivElement} */ (document.querySelector('#authStatus'))
@@ -513,12 +862,8 @@ const authModeLoginBtn = /** @type {HTMLButtonElement} */ (document.querySelecto
 const authModeRegisterBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#authModeRegisterBtn'))
 const profileSummary = /** @type {HTMLDivElement} */ (document.querySelector('#profileSummary'))
 const profileCurrentName = /** @type {HTMLDivElement} */ (document.querySelector('#profileCurrentName'))
-const profileEditBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileEditBtn'))
-const profileForm = /** @type {HTMLFormElement} */ (document.querySelector('#profileForm'))
-const profileName = /** @type {HTMLInputElement} */ (document.querySelector('#profileName'))
-const profileSaveBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileSaveBtn'))
-const profileCancelBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#profileCancelBtn'))
-const profileError = /** @type {HTMLDivElement} */ (document.querySelector('#profileError'))
+const profileCurrentEmail = /** @type {HTMLDivElement} */ (document.querySelector('#profileCurrentEmail'))
+const profileCurrentContact = /** @type {HTMLDivElement} */ (document.querySelector('#profileCurrentContact'))
 const authForm = /** @type {HTMLFormElement} */ (document.querySelector('#authForm'))
 const authNameField = /** @type {HTMLLabelElement} */ (document.querySelector('#authNameField'))
 const authName = /** @type {HTMLInputElement} */ (document.querySelector('#authName'))
@@ -538,6 +883,7 @@ const monthlySavingsOut = /** @type {HTMLDivElement} */ (document.querySelector(
 const monthlyExpensesOut = /** @type {HTMLDivElement} */ (document.querySelector('#monthlyExpenses'))
 const yearlySavingsOut = /** @type {HTMLDivElement} */ (document.querySelector('#yearlySavings'))
 const yearlyExpensesOut = /** @type {HTMLDivElement} */ (document.querySelector('#yearlyExpenses'))
+const starredHighlightsWrap = /** @type {HTMLDivElement} */ (document.querySelector('#starredHighlightsWrap'))
 
 const goalBarFill = /** @type {HTMLDivElement} */ (document.querySelector('#goalBarFill'))
 const barCurrent = /** @type {HTMLSpanElement} */ (document.querySelector('#barCurrent'))
@@ -552,6 +898,344 @@ const LEDGER_CLOUD_SYNC_PREFIX = 'freedom-program:ledger-cloud-sync:v1:'
 const LEDGER_CLOUD_PULL_PATH = '/ledger/pull'
 const LEDGER_CLOUD_UPSERT_PATH = '/ledger/upsert'
 const PROGRAM_YEARS = 4
+const HABIT_BOARD_STORAGE_PREFIX = 'freedom-program:habit-board:v1:'
+const PROFILE_SETTINGS_STORAGE_PREFIX = 'freedom-program:profile-settings:v1:'
+const LEDGER_META_STORAGE_PREFIX = 'freedom-program:ledger-meta:v1:'
+const DEFAULT_FUND_NAMES = ['E-Fund', 'Car Fund', 'Next Big Fund']
+const DEFAULT_EXPENSE_CATEGORIES = ['Housing', 'Transportation', 'Food', 'Utilities', 'Health', 'Education', 'Other']
+
+function getUserScopedStorageKey(prefix) {
+	const email = String(session?.email || '').trim().toLowerCase()
+	return `${prefix}${email || 'anonymous'}`
+}
+
+function loadScopedJson(prefix, fallback) {
+	try {
+		const raw = localStorage.getItem(getUserScopedStorageKey(prefix))
+		if (!raw) return fallback
+		return JSON.parse(raw)
+	} catch {
+		return fallback
+	}
+}
+
+function loadScopedArray(prefix) {
+	const data = loadScopedJson(prefix, [])
+	return Array.isArray(data) ? data : []
+}
+
+function saveScopedJson(prefix, value) {
+	try {
+		localStorage.setItem(getUserScopedStorageKey(prefix), JSON.stringify(value))
+	} catch {
+		// ignore
+	}
+}
+
+function sanitizeShortText(value, max = 120) {
+	return String(value || '').trim().replace(/\s+/g, ' ').slice(0, max)
+}
+
+function sanitizeLongText(value, max = 800) {
+	return String(value || '').trim().slice(0, max)
+}
+
+function sanitizeDateString(value, fallbackMs) {
+	const ms = parseDateInputToDayMs(value)
+	if (!Number.isFinite(ms) || ms <= 0) return isoDateValue(fallbackMs)
+	return isoDateValue(ms)
+}
+
+function normalizeFundName(value) {
+	return sanitizeShortText(value, 60)
+}
+
+function createDefaultProfileSettings() {
+	const startMs = startOfLocalDayMs(new Date())
+	const endMs = addYearsMs(startMs, PROGRAM_YEARS)
+	return {
+		name: '',
+		email: '',
+		contactInfo: '',
+		goalStartDate: isoDateValue(startMs),
+		goalEndDate: isoDateValue(endMs),
+		strengths: '',
+		weaknesses: '',
+	}
+}
+
+function sanitizeProfileSettings(value) {
+	const base = createDefaultProfileSettings()
+	const next = {
+		name: sanitizeShortText(value?.name || '', 120),
+		email: sanitizeShortText(value?.email || '', 160),
+		contactInfo: sanitizeLongText(value?.contactInfo || '', 320),
+		goalStartDate: String(value?.goalStartDate || base.goalStartDate).trim() || base.goalStartDate,
+		goalEndDate: String(value?.goalEndDate || base.goalEndDate).trim() || base.goalEndDate,
+		strengths: sanitizeLongText(value?.strengths || '', 500),
+		weaknesses: sanitizeLongText(value?.weaknesses || '', 500),
+	}
+	const startMs = parseDateInputToDayMs(next.goalStartDate)
+	const endMs = parseDateInputToDayMs(next.goalEndDate)
+	if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+		next.goalStartDate = base.goalStartDate
+		next.goalEndDate = base.goalEndDate
+	}
+	return next
+}
+
+function createDefaultHabitBoardState() {
+	return {
+		items: [
+			{ id: 'habit-1', icon: 'W', title: 'Wake up on time', description: 'Show up on time and ready to work.' },
+			{ id: 'habit-2', icon: 'A', title: 'Attitude', description: 'Keep a strong attitude and stay teachable.' },
+			{ id: 'habit-3', icon: 'D', title: 'Do the work', description: 'Finish the next right task with effort.' },
+			{ id: 'habit-4', icon: 'E', title: 'Eye open', description: 'Stay alert for opportunities and next steps.' },
+		],
+		weeksByKey: {},
+	}
+}
+
+function sanitizeHabitBoardState(value) {
+	const base = createDefaultHabitBoardState()
+	const rawItems = Array.isArray(value?.items) ? value.items.slice(0, 4) : []
+	const items = base.items.map((item, index) => {
+		const next = rawItems[index] || item
+		return {
+			id: item.id,
+			icon: sanitizeShortText(next?.icon || item.icon, 10),
+			title: sanitizeShortText(next?.title || item.title, 60),
+			description: sanitizeLongText(next?.description || item.description, 180),
+		}
+	})
+	const weeksByKey = {}
+	for (const [weekKey, weekValue] of Object.entries(value?.weeksByKey || {})) {
+		const safeWeekKey = sanitizeDateString(weekKey, startOfLocalWeekMs(new Date()))
+		const rawDays = Array.isArray(weekValue?.days) ? weekValue.days.slice(0, 7) : []
+		weeksByKey[safeWeekKey] = {
+			days: new Array(7).fill(null).map((_, index) => {
+				const day = rawDays[index] || {}
+				const checks = Array.isArray(day?.checks) ? day.checks.slice(0, 4).map(Boolean) : [false, false, false, false]
+				while (checks.length < 4) checks.push(false)
+				return {
+					did: sanitizeLongText(day?.did || '', 240),
+					didWell: sanitizeLongText(day?.didWell || '', 240),
+					couldDoBetter: sanitizeLongText(day?.couldDoBetter || '', 240),
+					checks,
+					isStarred: Boolean(day?.isStarred),
+					starredNote: '',
+				}
+			}),
+		}
+	}
+	return { items, weeksByKey }
+}
+
+function sanitizeWeeklyReportEntry(value) {
+	const starredSections = sanitizeStarredSections(value?.starredSections, WEEKLY_STAR_KEYS)
+	if (!hasActiveStarredSections(starredSections) && value?.isStarred) {
+		starredSections.lessons = {
+			active: true,
+			note: '',
+		}
+	}
+	return {
+		week: sanitizeDateString(value?.week, startOfLocalWeekMs(new Date())),
+		meetingWho1: sanitizeShortText(value?.meetingWho1 || '', 120),
+		meetingLearned1: sanitizeLongText(value?.meetingLearned1 || '', 240),
+		meetingWho2: sanitizeShortText(value?.meetingWho2 || '', 120),
+		meetingLearned2: sanitizeLongText(value?.meetingLearned2 || '', 240),
+		book1: sanitizeShortText(value?.book1 || '', 120),
+		book1Chapter: sanitizeShortText(value?.book1Chapter || '', 60),
+		book1Learned: sanitizeLongText(value?.book1Learned || '', 240),
+		book2: sanitizeShortText(value?.book2 || '', 120),
+		book2Chapter: sanitizeShortText(value?.book2Chapter || '', 60),
+		book2Learned: sanitizeLongText(value?.book2Learned || '', 240),
+		lessonTitle1: sanitizeShortText(value?.lessonTitle1 || '', 120),
+		lessonLearned1: sanitizeLongText(value?.lessonLearned1 || '', 240),
+		lessonTitle2: sanitizeShortText(value?.lessonTitle2 || '', 120),
+		lessonLearned2: sanitizeLongText(value?.lessonLearned2 || '', 240),
+		incomeJob1: Math.max(0, Math.round(Number(value?.incomeJob1) || 0)),
+		incomeJob2: Math.max(0, Math.round(Number(value?.incomeJob2) || 0)),
+		expenses: Math.max(0, Math.round(Number(value?.expenses) || 0)),
+		isStarred: hasActiveStarredSections(starredSections) || Boolean(value?.isStarred),
+		starredNote: '',
+		starredSections,
+	}
+}
+
+function sanitizeJournalEntry(value) {
+	const own = Math.max(0, Math.round(Number(value?.own) || 0))
+	const owe = Math.max(0, Math.round(Number(value?.owe) || 0))
+	const starredSections = sanitizeStarredSections(value?.starredSections, JOURNAL_STAR_KEYS)
+	if (!hasActiveStarredSections(starredSections) && value?.isStarred) {
+		starredSections.financial = {
+			active: true,
+			note: '',
+		}
+	}
+	return {
+		month: sanitizeDateString(value?.month, startOfLocalMonthMs(new Date())),
+		own,
+		owe,
+		financialProgress: sanitizeLongText(value?.financialProgress || '', 200),
+		aheadBehind: sanitizeShortText(value?.aheadBehind || '', 60),
+		goalThisMonth: sanitizeLongText(value?.goalThisMonth || '', 240),
+		primaryJob: sanitizeShortText(value?.primaryJob || '', 120),
+		secondaryJob: sanitizeShortText(value?.secondaryJob || '', 120),
+		volunteerOpportunities: sanitizeLongText(value?.volunteerOpportunities || '', 240),
+		reading: sanitizeLongText(value?.reading || '', 240),
+		meetings: sanitizeLongText(value?.meetings || '', 240),
+		classes: sanitizeLongText(value?.classes || '', 240),
+		billingJob: sanitizeLongText(value?.billingJob || '', 240),
+		interests: sanitizeLongText(value?.interests || '', 240),
+		enjoying: sanitizeLongText(value?.enjoying || '', 240),
+		helpPeople: sanitizeLongText(value?.helpPeople || '', 240),
+		isStarred: hasActiveStarredSections(starredSections) || Boolean(value?.isStarred),
+		starredNote: '',
+		starredSections,
+	}
+}
+
+function getCurrentJournalEntry() {
+	const currentMonth = getCurrentMonthIso()
+	return journalEntries.find((entry) => entry.month === currentMonth) || sanitizeJournalEntry({ month: currentMonth })
+}
+
+function getCurrentWeeklyReportEntry() {
+	const currentWeek = getCurrentWeekIso()
+	return weeklyReports.find((entry) => entry.week === currentWeek) || sanitizeWeeklyReportEntry({ week: currentWeek })
+}
+
+function getStarredHighlights() {
+	/** @type {Array<{ kind: string, label: string, note: string, summary: string }>} */
+	const highlights = []
+	for (const entry of journalEntries) {
+		if (entry.starredSections?.financial?.active) highlights.push({ kind: 'Month', label: `${formatMonthHeading(entry.month)} · Financial`, note: '', summary: entry.goalThisMonth || entry.financialProgress || entry.aheadBehind })
+		if (entry.starredSections?.jobs?.active) highlights.push({ kind: 'Month', label: `${formatMonthHeading(entry.month)} · Jobs`, note: '', summary: [entry.primaryJob, entry.secondaryJob, entry.volunteerOpportunities].filter(Boolean).join('\n') })
+		if (entry.starredSections?.lessons?.active) highlights.push({ kind: 'Month', label: `${formatMonthHeading(entry.month)} · Lessons`, note: '', summary: [entry.reading, entry.meetings, entry.classes].filter(Boolean).join('\n') })
+		if (entry.starredSections?.meaningfulWork?.active) highlights.push({ kind: 'Month', label: `${formatMonthHeading(entry.month)} · Meaningful Work`, note: '', summary: [entry.billingJob, entry.interests, entry.enjoying, entry.helpPeople].filter(Boolean).join('\n') })
+	}
+	for (const entry of weeklyReports) {
+		if (entry.starredSections?.meetings?.active) highlights.push({ kind: 'Week', label: `Week of ${formatDateLabel(entry.week)} · Meetings`, note: '', summary: [entry.meetingWho1 && `Who: ${entry.meetingWho1}`, entry.meetingLearned1, entry.meetingWho2 && `Who: ${entry.meetingWho2}`, entry.meetingLearned2].filter(Boolean).join('\n') })
+		if (entry.starredSections?.books?.active) highlights.push({ kind: 'Week', label: `Week of ${formatDateLabel(entry.week)} · Books`, note: '', summary: [entry.book1 && `${entry.book1} (${entry.book1Chapter})`, entry.book1Learned, entry.book2 && `${entry.book2} (${entry.book2Chapter})`, entry.book2Learned].filter(Boolean).join('\n') })
+		if (entry.starredSections?.lessons?.active) highlights.push({ kind: 'Week', label: `Week of ${formatDateLabel(entry.week)} · Lessons`, note: '', summary: [entry.lessonTitle1 && `${entry.lessonTitle1}: ${entry.lessonLearned1}`, entry.lessonTitle2 && `${entry.lessonTitle2}: ${entry.lessonLearned2}`].filter(Boolean).join('\n') })
+		if (entry.starredSections?.finances?.active) highlights.push({ kind: 'Week', label: `Week of ${formatDateLabel(entry.week)} · Finances`, note: '', summary: `Income ${formatDollars(entry.incomeJob1 + entry.incomeJob2)} · Expenses ${formatDollars(entry.expenses)} · Margin ${formatSignedDollars(entry.incomeJob1 + entry.incomeJob2 - entry.expenses)}` })
+	}
+	const safeBoard = sanitizeHabitBoardState(habitBoardState)
+	for (const [weekKey, weekValue] of Object.entries(safeBoard.weeksByKey || {})) {
+		weekValue.days.forEach((day, index) => {
+			if (!day.isStarred) return
+			const dayMs = startOfLocalWeekMs(new Date(weekKey)) + index * DAY_MS
+			highlights.push({ kind: 'Day', label: formatDateLabel(dayMs), note: '', summary: day.didWell || day.did || day.couldDoBetter })
+		})
+	}
+	return highlights.sort((a, b) => b.label.localeCompare(a.label))
+}
+
+function sanitizeLedgerEntryMeta(value) {
+	const funds = {
+		'E-Fund': Math.max(0, Math.round(Number(value?.funds?.['E-Fund']) || 0)),
+		'Car Fund': Math.max(0, Math.round(Number(value?.funds?.['Car Fund']) || 0)),
+		'Next Big Fund': Math.max(0, Math.round(Number(value?.funds?.['Next Big Fund']) || 0)),
+	}
+	for (const [fundName, amount] of Object.entries(value?.funds || {})) {
+		const safeFundName = normalizeFundName(fundName)
+		if (!safeFundName || DEFAULT_FUND_NAMES.includes(safeFundName)) continue
+		funds[safeFundName] = Math.max(0, Math.round(Number(amount) || 0))
+	}
+	return {
+		incomeSource: sanitizeShortText(value?.incomeSource || '', 120),
+		incomeNote: sanitizeLongText(value?.incomeNote || '', 240),
+		expenseCategory: DEFAULT_EXPENSE_CATEGORIES.includes(String(value?.expenseCategory || '')) ? String(value?.expenseCategory || 'Other') : 'Other',
+		expenseNote: sanitizeLongText(value?.expenseNote || '', 240),
+		funds,
+	}
+}
+
+async function loadUserScopedAppState() {
+	if (!session) {
+		profileSettings = createDefaultProfileSettings()
+		habitBoardState = createDefaultHabitBoardState()
+		weeklyReports = []
+		journalEntries = []
+		ledgerEntryMetaByClientId = {}
+		return
+	}
+	if (isDesktopApp && desktop?.appState?.getRendererState) {
+		try {
+			const savedState = await desktop.appState.getRendererState()
+			const loadedSettings = savedState?.profileSettings || {}
+			profileSettings = sanitizeProfileSettings({
+				...loadedSettings,
+				name: loadedSettings?.name || session?.name || '',
+				email: loadedSettings?.email || session?.email || '',
+			})
+			habitBoardState = sanitizeHabitBoardState(savedState?.habitBoardState || createDefaultHabitBoardState())
+			weeklyReports = (Array.isArray(savedState?.weeklyReports) ? savedState.weeklyReports : []).map(sanitizeWeeklyReportEntry).sort((a, b) => b.week.localeCompare(a.week))
+			journalEntries = (Array.isArray(savedState?.journalEntries) ? savedState.journalEntries : []).map(sanitizeJournalEntry).sort((a, b) => b.month.localeCompare(a.month))
+			ledgerEntryMetaByClientId = Object.fromEntries(
+				Object.entries(savedState?.ledgerEntryMetaByClientId || {}).map(([clientId, entryMeta]) => [clientId, sanitizeLedgerEntryMeta(entryMeta)])
+			)
+			return
+		} catch {
+			// fall back to local storage
+		}
+	}
+	const loadedSettings = loadScopedJson(PROFILE_SETTINGS_STORAGE_PREFIX, createDefaultProfileSettings())
+	profileSettings = sanitizeProfileSettings({
+		...loadedSettings,
+		name: loadedSettings?.name || session?.name || '',
+		email: loadedSettings?.email || session?.email || '',
+	})
+	habitBoardState = sanitizeHabitBoardState(loadScopedJson(HABIT_BOARD_STORAGE_PREFIX, createDefaultHabitBoardState()))
+	weeklyReports = loadScopedArray(WEEKLY_REPORT_STORAGE_PREFIX).map(sanitizeWeeklyReportEntry).sort((a, b) => b.week.localeCompare(a.week))
+	journalEntries = loadScopedArray(JOURNAL_STORAGE_PREFIX).map(sanitizeJournalEntry).sort((a, b) => b.month.localeCompare(a.month))
+	const meta = loadScopedJson(LEDGER_META_STORAGE_PREFIX, {})
+	ledgerEntryMetaByClientId = Object.fromEntries(
+		Object.entries(meta || {}).map(([clientId, entryMeta]) => [clientId, sanitizeLedgerEntryMeta(entryMeta)])
+	)
+}
+
+function saveProfileSettingsToStorage(nextSettings) {
+	profileSettings = sanitizeProfileSettings(nextSettings)
+	saveScopedJson(PROFILE_SETTINGS_STORAGE_PREFIX, profileSettings)
+	void persistDesktopRendererState()
+}
+
+function saveHabitBoardToStorage(nextHabitBoardState) {
+	habitBoardState = sanitizeHabitBoardState(nextHabitBoardState)
+	saveScopedJson(HABIT_BOARD_STORAGE_PREFIX, habitBoardState)
+	void persistDesktopRendererState()
+}
+
+function saveWeeklyReportsToStorage(nextWeeklyReports) {
+	weeklyReports = (Array.isArray(nextWeeklyReports) ? nextWeeklyReports : []).map(sanitizeWeeklyReportEntry).sort((a, b) => b.week.localeCompare(a.week))
+	saveScopedJson(WEEKLY_REPORT_STORAGE_PREFIX, weeklyReports)
+	void persistDesktopRendererState()
+}
+
+function saveJournalEntriesToStorage(nextJournalEntries) {
+	journalEntries = (Array.isArray(nextJournalEntries) ? nextJournalEntries : []).map(sanitizeJournalEntry).sort((a, b) => b.month.localeCompare(a.month))
+	saveScopedJson(JOURNAL_STORAGE_PREFIX, journalEntries)
+	void persistDesktopRendererState()
+}
+
+function saveLedgerEntryMetaToStorage() {
+	saveScopedJson(LEDGER_META_STORAGE_PREFIX, ledgerEntryMetaByClientId)
+	void persistDesktopRendererState()
+}
+
+function getLedgerEntryMeta(clientId) {
+	if (!clientId) return sanitizeLedgerEntryMeta({})
+	return sanitizeLedgerEntryMeta(ledgerEntryMetaByClientId[clientId] || {})
+}
+
+function setLedgerEntryMeta(clientId, meta) {
+	if (!clientId) return
+	ledgerEntryMetaByClientId[clientId] = sanitizeLedgerEntryMeta(meta)
+	saveLedgerEntryMetaToStorage()
+}
 
 function makeClientId() {
 	try {
@@ -898,7 +1582,7 @@ async function addLedgerEntry({ dayMs, incomeDollars, expensesDollars, savingsDo
 		ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
 		enqueueLedgerForCloudSync(entry.clientId)
 		void syncLedgerWithCloud()
-		return
+		return entry
 	}
 
 	ledgerEntries.push(entry)
@@ -906,6 +1590,7 @@ async function addLedgerEntry({ dayMs, incomeDollars, expensesDollars, savingsDo
 	saveLedgerToLocalStorage()
 	enqueueLedgerForCloudSync(entry.clientId)
 	void syncLedgerWithCloud()
+	return entry
 }
 
 /** @type {null | { canvasW: number, canvasH: number, padL: number, padT: number, plotW: number, plotH: number, labels: string[], x: number[], series: Array<{ key: string, values: number[], points: Array<{ x: number, y: number, v: number }> }> }} */
@@ -955,27 +1640,36 @@ if (heroLogo) {
 const homeSection = /** @type {HTMLElement} */ (document.querySelector('#home'))
 const dashboardSection = /** @type {HTMLElement} */ (document.querySelector('#dashboard'))
 const detailsSection = /** @type {HTMLElement} */ (document.querySelector('#details'))
+const journalSection = /** @type {HTMLElement} */ (document.querySelector('#journal'))
+const weeklySection = /** @type {HTMLElement} */ (document.querySelector('#weekly'))
 const habitsSection = /** @type {HTMLElement} */ (document.querySelector('#habits'))
+const settingsSection = /** @type {HTMLElement} */ (document.querySelector('#settings'))
 
 function normalizeRoute(hash) {
 	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
-	const allowed = new Set(['home', 'dashboard', 'details', 'habits'])
+	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'settings'])
 	return allowed.has(raw) ? raw : 'dashboard'
 }
 
 function renderRoute() {
 	const route = normalizeRoute(location.hash)
-	const needsAuth = route === 'details' || route === 'habits'
+	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'settings'
 	const authed = Boolean(session)
 	const target = needsAuth && !authed ? 'dashboard' : route
 
 	if (homeSection) homeSection.hidden = target !== 'home'
 	if (dashboardSection) dashboardSection.hidden = target !== 'dashboard'
 	if (detailsSection) detailsSection.hidden = target !== 'details'
+	if (journalSection) journalSection.hidden = target !== 'journal'
+	if (weeklySection) weeklySection.hidden = target !== 'weekly'
 	if (habitsSection) habitsSection.hidden = target !== 'habits'
+	if (settingsSection) settingsSection.hidden = target !== 'settings'
 
 	// Ensure charts render when navigating to details.
 	if (target === 'details') drawDetails()
+	if (target === 'weekly') renderWeeklyReport()
+	if (target === 'habits') renderHabitBoard()
+	if (target === 'settings') renderSettingsPanel()
 
 	// Avoid weird scroll positions when switching pages.
 	try {
@@ -1164,6 +1858,10 @@ function formatDollarsFromUnits(units) {
 	return `$${dollars.toLocaleString()}`
 }
 
+function formatDateLabel(ms) {
+	return new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
 function parseMoneyInput(input) {
 	// Keep it forgiving: treat empty/invalid as 0.
 	const n = Number(input)
@@ -1236,12 +1934,6 @@ function showAuthError(message) {
 	authError.hidden = !message
 }
 
-function showProfileError(message) {
-	if (!profileError) return
-	profileError.textContent = message
-	profileError.hidden = !message
-}
-
 function setAuthMode(mode) {
 	authMode = mode === 'register' ? 'register' : 'login'
 	if (!authNameField || !loginBtn || !registerBtn || !authHint || !authModeLoginBtn || !authModeRegisterBtn) return
@@ -1258,15 +1950,6 @@ function setAuthMode(mode) {
 	authModeRegisterBtn.classList.toggle('auth-mode-btn--active', isRegister)
 	authPassword.autocomplete = isRegister ? 'new-password' : 'current-password'
 	showAuthError('')
-}
-
-function setProfileEditorOpen(isOpen) {
-	isProfileEditorOpen = Boolean(isOpen)
-	if (!profileForm || !profileSummary || !session) return
-	profileForm.hidden = !isProfileEditorOpen
-	profileSummary.hidden = isProfileEditorOpen
-	if (isProfileEditorOpen && profileName) profileName.value = session.name || ''
-	if (!isProfileEditorOpen) showProfileError('')
 }
 
 function resetGoalUi({ persistLocal }) {
@@ -1296,32 +1979,30 @@ function updateAuthUi() {
 		logoutBtn.hidden = false
 		if (authModeSwitch) authModeSwitch.hidden = true
 		if (authHint) {
-			authHint.hidden = Boolean(session.name)
-			authHint.textContent = 'Your login email stays the same. Add a name if you want it shown on your account.'
+			authHint.hidden = true
+			authHint.textContent = 'Manage your profile details in Settings.'
 		}
-		if (profileCurrentName) profileCurrentName.textContent = session.name || 'No name set'
-		if (profileSummary) profileSummary.hidden = isProfileEditorOpen
-		if (profileForm) profileForm.hidden = !isProfileEditorOpen
-		if (profileName && document.activeElement !== profileName) profileName.value = session.name || ''
+		const dashboardName = profileSettings.name || session.name || 'No name set'
+		const dashboardEmail = profileSettings.email || session.email || 'No email set'
+		const dashboardContact = profileSettings.contactInfo || 'Add contact info in Settings.'
+		if (profileCurrentName) profileCurrentName.textContent = dashboardName
+		if (profileCurrentEmail) profileCurrentEmail.textContent = dashboardEmail
+		if (profileCurrentContact) profileCurrentContact.textContent = dashboardContact
+		if (profileSummary) profileSummary.hidden = false
 		authForm.classList.add('auth-form--hidden')
 		authModeLoginBtn.hidden = true
 		authModeRegisterBtn.hidden = true
 		showAuthError('')
-		showProfileError('')
 	} else {
 		authStatus.textContent = 'Not logged in'
 		logoutBtn.hidden = true
-		isProfileEditorOpen = false
 		if (authModeSwitch) authModeSwitch.hidden = false
 		if (authHint) authHint.hidden = false
 		if (profileSummary) profileSummary.hidden = true
-		if (profileForm) profileForm.hidden = true
-		if (profileName) profileName.value = ''
 		authForm.classList.remove('auth-form--hidden')
 		authModeLoginBtn.hidden = false
 		authModeRegisterBtn.hidden = false
 		showAuthError('')
-		showProfileError('')
 		setAuthMode(authMode)
 	}
 	setDashboardAuthGate(Boolean(session))
@@ -1337,7 +2018,6 @@ async function persistProfileName(name) {
 		const out = await desktop.profile.setName(safeName)
 		const nextName = normalizePersonName(out?.name)
 		session = { ...session, name: nextName || safeName || undefined }
-		setProfileEditorOpen(false)
 		updateAuthUi()
 		return
 	}
@@ -1347,7 +2027,6 @@ async function persistProfileName(name) {
 	const nextName = normalizePersonName(out?.name)
 	session = { ...session, name: nextName || safeName || undefined }
 	saveWebSessionToStorage(session)
-	setProfileEditorOpen(false)
 	updateAuthUi()
 }
 
@@ -1403,6 +2082,13 @@ function updateDashboardSummary({ goalDollars, currentDollars }) {
 	if (goalBarFill) goalBarFill.style.width = `${Math.round(pct * 1000) / 10}%`
 	if (barCurrent) barCurrent.textContent = `Current: ${formatDollars(currentDollars)}`
 	if (barGoal) barGoal.textContent = `Goal: ${formatDollars(goalDollars)}`
+
+	const timeline = getGoalTimeline()
+	const weeklySnapshot = getWeeklyGoalSnapshot(goalDollars, currentDollars, timeline)
+	if (goalStartDateOut) goalStartDateOut.textContent = formatDateLabel(timeline.startMs)
+	if (goalEndDateOut) goalEndDateOut.textContent = formatDateLabel(timeline.endMs)
+	if (goalWeeklyTargetOut) goalWeeklyTargetOut.textContent = formatDollars(weeklySnapshot.weeklyDollars)
+	if (goalWeeklyCopyOut) goalWeeklyCopyOut.textContent = weeklySnapshot.copy
 }
 
 async function refreshSessionAndLoad() {
@@ -1415,6 +2101,7 @@ async function refreshSessionAndLoad() {
 	} else {
 		session = loadWebSessionFromStorage()
 	}
+	await loadUserScopedAppState()
 	updateAuthUi()
 	if (isDesktopApp) {
 		if (session) {
@@ -1527,20 +2214,13 @@ async function persistGoalDollars(goalDollars) {
 
 	if (isDesktopApp) {
 		if (!session) return
-		if (!session?.token) {
-			if (!didWarnDesktopGoalSync) {
-				didWarnDesktopGoalSync = true
-				showAuthError('Cloud sync is unavailable (no AWS token). Try logging out and logging back in.')
-			}
-			return
-		}
 		if (!desktop?.profile?.setGoal) return
 		try {
 			await desktop.profile.setGoal(safe)
 		} catch {
 			if (!didWarnDesktopGoalSync) {
 				didWarnDesktopGoalSync = true
-				showAuthError('Cloud sync failed while saving your goal. Check your API/Lambda logs for /profile/goal.')
+				showAuthError('Saving your goal failed in the desktop app.')
 			}
 		}
 		return
@@ -1593,12 +2273,18 @@ function formatYear(ms) {
 	return String(new Date(ms).getFullYear())
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
-
 function fourYearWindowStartDayMs() {
 	const now = new Date()
 	const start = new Date(now.getFullYear() - PROGRAM_YEARS, now.getMonth(), now.getDate())
 	return startOfLocalDayMs(start)
+}
+
+function getGoalTimeline() {
+	const safeSettings = sanitizeProfileSettings(profileSettings)
+	const startMs = parseDateInputToDayMs(safeSettings.goalStartDate)
+	let endMs = parseDateInputToDayMs(safeSettings.goalEndDate)
+	if (!Number.isFinite(endMs) || endMs <= startMs) endMs = addYearsMs(startMs, PROGRAM_YEARS)
+	return { startMs, endMs }
 }
 
 function sumLedgerSavingsSince(startDayMs) {
@@ -1615,7 +2301,322 @@ function sumLedgerSavingsSince(startDayMs) {
 
 function getCurrentSavingsForGoalProgress() {
 	if (!session) return 0
-	return sumLedgerSavingsSince(fourYearWindowStartDayMs())
+	return sumLedgerSavingsSince(getGoalTimeline().startMs)
+}
+
+function getWeeklyGoalSnapshot(goalDollars, currentDollars, timeline = getGoalTimeline()) {
+	const nowMs = startOfLocalDayMs(new Date())
+	const remainingDollars = Math.max(0, Math.round(goalDollars - currentDollars))
+	const effectiveStartMs = Math.max(nowMs, timeline.startMs)
+	const remainingMs = Math.max(0, timeline.endMs - effectiveStartMs)
+	const weeksRemaining = Math.max(1, Math.ceil(remainingMs / (7 * DAY_MS)))
+	if (remainingDollars <= 0) {
+		return { weeklyDollars: 0, copy: 'Goal met for the current timeline.' }
+	}
+	if (timeline.endMs <= nowMs) {
+		return { weeklyDollars: remainingDollars, copy: 'Timeline has ended. Update your dates in Settings.' }
+	}
+	return {
+		weeklyDollars: Math.ceil(remainingDollars / weeksRemaining),
+		copy: `${weeksRemaining} week${weeksRemaining === 1 ? '' : 's'} remaining based on current savings.`,
+	}
+}
+
+function getEntriesForCurrentPeriod() {
+	const { startMs, endMs } = getPeriodBounds(detailKind, detailAnchorDayMs)
+	return ledgerEntries
+		.filter((entry) => Number(entry?.dayMs) >= startMs && Number(entry?.dayMs) < endMs)
+		.slice()
+		.sort((a, b) => Number(b?.dayMs) - Number(a?.dayMs))
+}
+
+function buildFundTotals(entries) {
+	const totals = new Map()
+	for (const fundName of DEFAULT_FUND_NAMES) totals.set(fundName, 0)
+	totals.set('Unallocated', 0)
+	for (const entry of entries) {
+		const savings = Math.max(0, Number(entry?.savingsDollars) || 0)
+		const meta = getLedgerEntryMeta(entry?.clientId)
+		let allocated = 0
+		for (const [fundName, amount] of Object.entries(meta.funds || {})) {
+			const safeFundName = normalizeFundName(fundName)
+			const safeAmount = Math.max(0, Math.round(Number(amount) || 0))
+			if (!safeFundName || safeAmount <= 0) continue
+			totals.set(safeFundName, (totals.get(safeFundName) || 0) + safeAmount)
+			allocated += safeAmount
+		}
+		if (savings > allocated) totals.set('Unallocated', (totals.get('Unallocated') || 0) + (savings - allocated))
+	}
+	return [...totals.entries()].filter(([, amount]) => amount > 0)
+}
+
+function renderFundSummary() {
+	if (!fundSummaryWrap) return
+	if (!session) {
+		fundSummaryWrap.innerHTML = '<div class="breakdown-empty">Log in to review savings funds.</div>'
+		return
+	}
+	const totals = buildFundTotals(getEntriesForCurrentPeriod())
+	if (!totals.length) {
+		fundSummaryWrap.innerHTML = '<div class="breakdown-empty">No savings fund activity in this period yet.</div>'
+		return
+	}
+	fundSummaryWrap.innerHTML = totals.map(([fundName, amount]) => `<div class="fund-pill"><span>${escapeHtml(fundName)}</span><strong>${formatDollars(amount)}</strong></div>`).join('')
+}
+
+function renderEntryFeed() {
+	if (!entryFeedWrap) return
+	if (!session) {
+		entryFeedWrap.innerHTML = '<div class="breakdown-empty">Log in to review recent entries.</div>'
+		return
+	}
+	const entries = getEntriesForCurrentPeriod().slice(0, 8)
+	if (!entries.length) {
+		entryFeedWrap.innerHTML = '<div class="breakdown-empty">No entries in this period yet.</div>'
+		return
+	}
+	entryFeedWrap.innerHTML = `<ul class="entry-feed">${entries.map((entry) => {
+		const meta = getLedgerEntryMeta(entry.clientId)
+		const fundList = Object.entries(meta.funds || {})
+			.filter(([, amount]) => Number(amount) > 0)
+			.map(([fundName, amount]) => `${fundName}: ${formatDollars(amount)}`)
+			.join(' · ')
+		return `<li class="entry-feed-item">
+			<div class="entry-feed-head">
+				<strong>${escapeHtml(formatDateLabel(entry.dayMs))}</strong>
+				<span>${formatDollars(entry.savingsDollars)} saved</span>
+			</div>
+			<div class="entry-feed-line">Income: ${formatDollars(entry.incomeDollars)}${meta.incomeSource ? ` · ${escapeHtml(meta.incomeSource)}` : ''}${meta.incomeNote ? ` · ${escapeHtml(meta.incomeNote)}` : ''}</div>
+			<div class="entry-feed-line">Expenses: ${formatDollars(entry.expensesDollars)}${meta.expenseCategory ? ` · ${escapeHtml(meta.expenseCategory)}` : ''}${meta.expenseNote ? ` · ${escapeHtml(meta.expenseNote)}` : ''}</div>
+			<div class="entry-feed-line">Funds: ${escapeHtml(fundList || 'Unallocated')}</div>
+		</li>`
+	}).join('')}</ul>`
+}
+
+function renderHabitBoard() {
+	if (!habitBoardWrap) return
+	if (!session) {
+		habitBoardWrap.innerHTML = '<div class="habit-gate">Log in to use the habit tracker.</div>'
+		return
+	}
+	const safeState = sanitizeHabitBoardState(habitBoardState)
+	const items = safeState.items
+	const currentWeekMs = startOfLocalWeekMs(new Date())
+	if (dailyReportWeekMs > currentWeekMs) setDailyReportWeek(currentWeekMs)
+	const weekMs = startOfLocalWeekMs(new Date(dailyReportWeekMs))
+	const weekKey = getDailyWeekKey(weekMs)
+	const weekState = getDailyWeekState(weekKey)
+	const dayLabels = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+	const completedCount = weekState.days.reduce((count, day) => count + day.checks.filter(Boolean).length, 0)
+	const safeDayIndex = Math.max(0, Math.min(6, Number.isFinite(dailyReportDayIndex) ? dailyReportDayIndex : getDefaultDailyFocusIndex(weekMs)))
+	dailyReportDayIndex = safeDayIndex
+	const focusedDay = weekState.days[safeDayIndex]
+	const focusedDayMs = weekMs + (safeDayIndex * DAY_MS)
+	const isCurrentWeek = weekMs === currentWeekMs
+	habitBoardWrap.innerHTML = `
+		<div class="daily-report-shell">
+			<div class="habit-board-head">
+				<div>
+					<div class="habit-kicker">Daily Report</div>
+					<p class="habit-copy">Focus on one day at a time, then use the weekly recap to review earlier days and move backward through previous weeks.</p>
+				</div>
+				<div class="habit-board-score">Week of ${escapeHtml(formatDateLabel(weekKey))} · ${completedCount}/28 habits checked</div>
+			</div>
+			<div class="daily-week-nav">
+				<button type="button" class="auth-btn auth-btn--secondary" data-action="prev-week">Previous Week</button>
+				<div class="daily-week-nav-copy">
+					<strong>${escapeHtml(formatWeekRangeLabel(weekMs))}</strong>
+					<span>${isCurrentWeek ? 'Current week' : 'Past week review'}</span>
+				</div>
+				<button type="button" class="auth-btn auth-btn--secondary" data-action="next-week" ${weekMs >= currentWeekMs ? 'disabled' : ''}>Next Week</button>
+			</div>
+			<div class="daily-focus-layout">
+				<div class="daily-main-card">
+					<div class="daily-focus-head">
+						<div>
+							<div class="habit-kicker">${isCurrentWeek && safeDayIndex === getCurrentWeekdayIndex(new Date()) ? 'Today\'s Focus' : 'Day Focus'}</div>
+							<h3 class="report-title daily-focus-title">${escapeHtml(dayLabels[safeDayIndex])}</h3>
+							<p class="habit-copy">${escapeHtml(formatDateLabel(focusedDayMs))}</p>
+						</div>
+						<div class="daily-focus-meta">
+							<span class="habit-card-chip">${focusedDay.checks.filter(Boolean).length}/4 habits</span>
+							${focusedDay.isStarred ? '<span class="habit-card-chip">Starred</span>' : ''}
+						</div>
+					</div>
+					<div class="daily-focus-grid">
+						<label class="auth-label daily-focus-field"><span>Did</span><textarea class="auth-input daily-report-textarea" data-day-field="did" data-day-index="${safeDayIndex}" rows="4">${escapeHtml(focusedDay.did)}</textarea></label>
+						<label class="auth-label daily-focus-field"><span>Did Well</span><textarea class="auth-input daily-report-textarea" data-day-field="didWell" data-day-index="${safeDayIndex}" rows="4">${escapeHtml(focusedDay.didWell)}</textarea></label>
+						<label class="auth-label daily-focus-field daily-focus-field--wide"><span>Could Do Better</span><textarea class="auth-input daily-report-textarea" data-day-field="couldDoBetter" data-day-index="${safeDayIndex}" rows="4">${escapeHtml(focusedDay.couldDoBetter)}</textarea></label>
+					</div>
+					<div class="daily-focus-fields">
+						<div class="daily-report-checks">${items.map((item, habitIndex) => `<button type="button" class="daily-check ${focusedDay.checks[habitIndex] ? 'daily-check--active' : ''}" data-action="toggle-check" data-day-index="${safeDayIndex}" data-habit-index="${habitIndex}" aria-label="${escapeHtml(item.title)} on ${dayLabels[safeDayIndex]}"><span>${escapeHtml(item.icon || String(habitIndex + 1))}</span><small>${escapeHtml(item.title || `Habit ${habitIndex + 1}`)}</small></button>`).join('')}</div>
+						<div class="daily-day-star"><button type="button" class="star-toggle ${focusedDay.isStarred ? 'star-toggle--active' : ''}" data-action="toggle-day-star" data-day-index="${safeDayIndex}">${focusedDay.isStarred ? 'Starred' : 'Star day'}</button></div>
+					</div>
+				</div>
+				<div class="daily-side-card">
+					<div class="report-block-title">Weekly Recap</div>
+					<div class="daily-week-recap">${weekState.days.map((day, dayIndex) => `<button type="button" class="daily-recap-item ${dayIndex === safeDayIndex ? 'daily-recap-item--active' : ''}" data-action="set-day" data-day-index="${dayIndex}"><strong>${escapeHtml(dayLabels[dayIndex])}</strong><span>${day.checks.filter(Boolean).length}/4 habits${day.isStarred ? ' · starred' : ''}</span><p>${escapeHtml(truncateText(day.didWell || day.did || day.couldDoBetter || 'No notes yet.'))}</p></button>`).join('')}</div>
+					<div class="daily-ledger-head"><div class="report-block-title">Habit Ledger</div><button type="button" class="auth-btn auth-btn--secondary" data-action="toggle-ledger-editor">${isHabitLedgerEditorOpen ? 'Done Editing' : 'Edit Ledger'}</button></div>
+					${isHabitLedgerEditorOpen ? `<div class="daily-ledger-editor">${items.map((item, index) => `<div class="daily-habit-chip"><label class="auth-label"><span>Habit ${index + 1} icon</span><input class="auth-input" data-field="icon" data-index="${index}" maxlength="10" value="${escapeHtml(item.icon)}" /></label><label class="auth-label"><span>Habit title</span><input class="auth-input" data-field="title" data-index="${index}" maxlength="60" value="${escapeHtml(item.title)}" /></label><label class="auth-label auth-label--wide"><span>Quick meaning</span><textarea class="auth-input habit-textarea" data-field="description" data-index="${index}" rows="3">${escapeHtml(item.description)}</textarea></label></div>`).join('')}</div>` : `<div class="habit-board-ledger">${items.map((item, index) => `<div class="habit-board-ledger-item"><strong>${escapeHtml(item.icon || String(index + 1))}</strong><span>${escapeHtml(item.title || `Habit ${index + 1}`)}</span><p>${escapeHtml(item.description || 'Add a quick meaning for this square.')}</p></div>`).join('')}</div>`}
+				</div>
+			</div>
+		</div>
+	`
+	if (!habitBoardWrap.dataset.bound) {
+		habitBoardWrap.addEventListener('click', (event) => {
+			const target = /** @type {HTMLElement} */ (event.target)
+			const actionTarget = target?.closest?.('[data-action]')
+			const action = String(actionTarget?.dataset?.action || '')
+			if (!action) return
+			if (action === 'prev-week') {
+				setDailyReportWeek(dailyReportWeekMs - (7 * DAY_MS))
+				renderHabitBoard()
+				return
+			}
+			if (action === 'next-week') {
+				setDailyReportWeek(Math.min(currentWeekMs, dailyReportWeekMs + (7 * DAY_MS)))
+				renderHabitBoard()
+				return
+			}
+			if (action === 'set-day') {
+				const nextDayIndex = Number(actionTarget.dataset.dayIndex)
+				if (!Number.isFinite(nextDayIndex)) return
+				dailyReportDayIndex = Math.max(0, Math.min(6, nextDayIndex))
+				renderHabitBoard()
+				return
+			}
+			if (action === 'toggle-ledger-editor') {
+				isHabitLedgerEditorOpen = !isHabitLedgerEditorOpen
+				renderHabitBoard()
+				return
+			}
+			if (action === 'toggle-check') {
+				const dayIndex = Number(actionTarget.dataset.dayIndex)
+				const habitIndex = Number(actionTarget.dataset.habitIndex)
+				if (!Number.isFinite(dayIndex) || !Number.isFinite(habitIndex)) return
+				const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+				nextWeek.days[dayIndex].checks[habitIndex] = !nextWeek.days[dayIndex].checks[habitIndex]
+				setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+				renderHabitBoard()
+				return
+			}
+			if (action === 'toggle-day-star') {
+				const dayIndex = Number(actionTarget.dataset.dayIndex)
+				if (!Number.isFinite(dayIndex)) return
+				const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+				nextWeek.days[dayIndex].isStarred = !nextWeek.days[dayIndex].isStarred
+				setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+				renderHabitBoard()
+			}
+		})
+		habitBoardWrap.addEventListener('input', (event) => {
+			const target = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (event.target)
+			const index = Number(target?.dataset?.index)
+			const field = String(target?.dataset?.field || '')
+			if (Number.isFinite(index) && field) {
+				const next = sanitizeHabitBoardState(habitBoardState)
+				if (!(field in next.items[index])) return
+				next.items[index][field] = target.value
+				saveHabitBoardToStorage(next)
+				return
+			}
+			const dayIndex = Number(target?.dataset?.dayIndex)
+			const dayField = String(target?.dataset?.dayField || '')
+			if (!Number.isFinite(dayIndex) || !dayField) return
+			const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+			nextWeek.days[dayIndex][dayField] = target.value
+			setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+		})
+		habitBoardWrap.addEventListener('change', () => {
+			renderHabitBoard()
+		})
+		habitBoardWrap.dataset.bound = 'true'
+	}
+}
+
+function renderSettingsPanel() {
+	if (!settingsWrap) return
+	if (!session) {
+		settingsWrap.innerHTML = '<div class="habit-gate">Log in to manage your settings.</div>'
+		return
+	}
+	const safeSettings = sanitizeProfileSettings(profileSettings)
+	settingsWrap.innerHTML = `
+		<form class="settings-form" id="settingsForm">
+			<div class="settings-grid">
+				<label class="auth-label">
+					<span>Name</span>
+					<input id="settingsName" class="auth-input" type="text" maxlength="120" value="${escapeHtml(safeSettings.name || session.name || '')}" />
+				</label>
+				<label class="auth-label">
+					<span>Email</span>
+					<input id="settingsEmail" class="auth-input" type="email" maxlength="160" value="${escapeHtml(safeSettings.email || session.email || '')}" />
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Contact info</span>
+					<textarea id="settingsContactInfo" class="auth-input habit-textarea" rows="3">${escapeHtml(safeSettings.contactInfo)}</textarea>
+				</label>
+				<label class="auth-label">
+					<span>Goal start date</span>
+					<input id="settingsGoalStartDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalStartDate)}" />
+				</label>
+				<label class="auth-label">
+					<span>Goal end date</span>
+					<input id="settingsGoalEndDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalEndDate)}" />
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Strengths</span>
+					<textarea id="settingsStrengths" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.strengths)}</textarea>
+				</label>
+				<label class="auth-label auth-label--wide">
+					<span>Weaknesses</span>
+					<textarea id="settingsWeaknesses" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.weaknesses)}</textarea>
+				</label>
+			</div>
+			<div class="auth-actions">
+				<button class="auth-btn" type="submit">Save settings</button>
+			</div>
+			<div class="auth-hint">Your login account remains separate from these local profile details until matching AWS endpoints are added.</div>
+			<div class="auth-error" id="settingsMessage" hidden></div>
+		</form>
+	`
+	const settingsForm = document.getElementById('settingsForm')
+	settingsForm?.addEventListener('submit', async (event) => {
+		event.preventDefault()
+		const settingsMessage = /** @type {HTMLDivElement | null} */ (document.getElementById('settingsMessage'))
+		const rawSettings = {
+			name: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsName'))?.value,
+			email: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsEmail'))?.value,
+			contactInfo: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsContactInfo'))?.value,
+			goalStartDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalStartDate'))?.value,
+			goalEndDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalEndDate'))?.value,
+			strengths: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsStrengths'))?.value,
+			weaknesses: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsWeaknesses'))?.value,
+		}
+		if (parseDateInputToDayMs(rawSettings.goalEndDate) <= parseDateInputToDayMs(rawSettings.goalStartDate)) {
+			if (settingsMessage) {
+				settingsMessage.textContent = 'End date must be after the start date.'
+				settingsMessage.hidden = false
+			}
+			return
+		}
+		const nextSettings = sanitizeProfileSettings(rawSettings)
+		saveProfileSettingsToStorage(nextSettings)
+		if (settingsMessage) {
+			settingsMessage.textContent = 'Settings saved locally.'
+			settingsMessage.hidden = false
+		}
+		if (nextSettings.name && nextSettings.name !== (session?.name || '')) {
+			try {
+				await persistProfileName(nextSettings.name)
+			} catch {
+				// Keep the local save even if account sync is unavailable.
+			}
+		}
+		updateAuthUi()
+		updateProgress()
+		drawDetails()
+	})
 }
 
 function getPeriodBounds(kind, anchorDayMs) {
@@ -1927,6 +2928,8 @@ function updateDetailsTotals() {
 	detailIncomeTotalOut.textContent = formatDollars(totals.incomeDollars)
 	detailExpensesTotalOut.textContent = formatDollars(totals.expensesDollars)
 	detailSavingsTotalOut.textContent = formatDollars(totals.savingsDollars)
+	renderFundSummary()
+	renderEntryFeed()
 }
 
 function drawDetails() {
@@ -2019,7 +3022,7 @@ authForm?.addEventListener('submit', async (e) => {
 		authName.value = ''
 		authPassword.value = ''
 		setAuthMode('login')
-		setProfileEditorOpen(false)
+		await loadUserScopedAppState()
 		updateAuthUi()
 		if (isDesktopApp) {
 			await loadGoalFromDbOrMigrate()
@@ -2046,23 +3049,6 @@ registerBtn?.addEventListener('click', async () => {
 authModeLoginBtn?.addEventListener('click', () => setAuthMode('login'))
 authModeRegisterBtn?.addEventListener('click', () => setAuthMode('register'))
 
-profileEditBtn?.addEventListener('click', () => setProfileEditorOpen(true))
-profileCancelBtn?.addEventListener('click', () => setProfileEditorOpen(false))
-
-profileForm?.addEventListener('submit', async (e) => {
-	e.preventDefault()
-	showProfileError('')
-	try {
-		if (!profileSaveBtn) return
-		profileSaveBtn.disabled = true
-		await persistProfileName(String(profileName?.value || ''))
-	} catch (err) {
-		showProfileError(err?.message ? String(err.message) : 'Could not save your name')
-	} finally {
-		if (profileSaveBtn) profileSaveBtn.disabled = false
-	}
-})
-
 logoutBtn?.addEventListener('click', async () => {
 	showAuthError('')
 	try {
@@ -2079,7 +3065,7 @@ logoutBtn?.addEventListener('click', async () => {
 			saveWebSessionToStorage(null)
 			resetGoalUi({ persistLocal: true })
 		}
-		setProfileEditorOpen(false)
+		await loadUserScopedAppState()
 		try {
 			saveLedgerCloudSyncState({ pendingClientIds: [], lastPullMs: 0 })
 		} catch {
@@ -2147,10 +3133,39 @@ entryForm?.addEventListener('submit', async (e) => {
 		const income = parseMoneyInput(entryIncomeInput?.value)
 		const expenses = parseMoneyInput(entryExpensesInput?.value)
 		const savings = parseMoneyInput(entrySavingsInput?.value)
-		await addLedgerEntry({ dayMs, incomeDollars: income, expensesDollars: expenses, savingsDollars: savings })
+		const fundEmergency = parseMoneyInput(entryFundEmergencyInput?.value)
+		const fundCar = parseMoneyInput(entryFundCarInput?.value)
+		const fundNextBig = parseMoneyInput(entryFundNextBigInput?.value)
+		const fundOtherAmount = parseMoneyInput(entryFundOtherAmountInput?.value)
+		const otherFundName = normalizeFundName(entryFundOtherNameInput?.value)
+		const allocated = fundEmergency + fundCar + fundNextBig + fundOtherAmount
+		if (allocated > savings) throw new Error('Savings fund amounts cannot exceed total savings.')
+		const entry = await addLedgerEntry({ dayMs, incomeDollars: income, expensesDollars: expenses, savingsDollars: savings })
+		const funds = {
+			'E-Fund': fundEmergency + Math.max(0, savings - allocated),
+			'Car Fund': fundCar,
+			'Next Big Fund': fundNextBig,
+		}
+		if (otherFundName && fundOtherAmount > 0) funds[otherFundName] = fundOtherAmount
+		setLedgerEntryMeta(entry?.clientId, {
+			incomeSource: sanitizeShortText(entryIncomeSourceInput?.value || '', 120),
+			incomeNote: sanitizeLongText(entryIncomeNoteInput?.value || '', 240),
+			expenseCategory: String(entryExpenseCategoryInput?.value || 'Other'),
+			expenseNote: sanitizeLongText(entryExpenseNoteInput?.value || '', 240),
+			funds,
+		})
 		if (entryIncomeInput) entryIncomeInput.value = '0'
+		if (entryIncomeSourceInput) entryIncomeSourceInput.value = ''
+		if (entryIncomeNoteInput) entryIncomeNoteInput.value = ''
 		if (entryExpensesInput) entryExpensesInput.value = '0'
+		if (entryExpenseCategoryInput) entryExpenseCategoryInput.value = 'Housing'
+		if (entryExpenseNoteInput) entryExpenseNoteInput.value = ''
 		if (entrySavingsInput) entrySavingsInput.value = '0'
+		if (entryFundEmergencyInput) entryFundEmergencyInput.value = '0'
+		if (entryFundCarInput) entryFundCarInput.value = '0'
+		if (entryFundNextBigInput) entryFundNextBigInput.value = '0'
+		if (entryFundOtherNameInput) entryFundOtherNameInput.value = ''
+		if (entryFundOtherAmountInput) entryFundOtherAmountInput.value = '0'
 		updateProgress()
 		drawDetails()
 	} catch (err) {

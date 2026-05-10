@@ -80,8 +80,18 @@ function migrate() {
 			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 		);
 
+		CREATE TABLE IF NOT EXISTS app_state (
+			user_id INTEGER NOT NULL,
+			state_key TEXT NOT NULL,
+			json_value TEXT NOT NULL,
+			updated_at_ms INTEGER NOT NULL,
+			PRIMARY KEY (user_id, state_key),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+
 		CREATE INDEX IF NOT EXISTS idx_savings_user_month ON savings(user_id, month_ms);
 		CREATE INDEX IF NOT EXISTS idx_ledger_user_day ON ledger_entries(user_id, day_ms);
+		CREATE INDEX IF NOT EXISTS idx_app_state_user_key ON app_state(user_id, state_key);
 	`)
 
 	try {
@@ -400,6 +410,38 @@ function addLedgerEntry({ userId, clientId, dayMs, incomeDollars, expensesDollar
 	return { id: row ? Number(row.id) : 0 }
 }
 
+function getAppState({ userId, stateKey }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (typeof stateKey !== 'string' || !stateKey.trim()) throw new Error('Invalid state key')
+	const row = getOne('SELECT json_value, updated_at_ms FROM app_state WHERE user_id = ? AND state_key = ?', [userId, stateKey.trim()])
+	if (!row) return null
+	let value = null
+	try {
+		value = JSON.parse(String(row.json_value || 'null'))
+	} catch {
+		value = null
+	}
+	return {
+		value,
+		updatedAtMs: Number(row.updated_at_ms),
+	}
+}
+
+function setAppState({ userId, stateKey, value }) {
+	if (!Number.isFinite(userId)) throw new Error('Invalid user id')
+	if (typeof stateKey !== 'string' || !stateKey.trim()) throw new Error('Invalid state key')
+	const now = Date.now()
+	run(
+		`INSERT INTO app_state (user_id, state_key, json_value, updated_at_ms)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(user_id, state_key)
+		 DO UPDATE SET json_value = excluded.json_value, updated_at_ms = excluded.updated_at_ms`,
+		[userId, stateKey.trim(), JSON.stringify(value ?? null), now]
+	)
+	persist()
+	return true
+}
+
 module.exports = {
 	initDb,
 	createUser,
@@ -414,6 +456,8 @@ module.exports = {
 	upsertUserGoalFromCloud,
 	listLedgerEntries,
 	addLedgerEntry,
+	getAppState,
+	setAppState,
 	normalizeEmail,
 	normalizeName,
 	updateUserName,
