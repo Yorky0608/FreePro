@@ -145,7 +145,9 @@ This outputs a production build into the `dist/` folder.
 
 Savings, journals, habits, settings, and ledger data are stored in browser storage for the current prototype flow.
 
-## Python DB Schema Init (portable)
+The current app does not read from a project SQLite file. If you see a local `.sqlite3` file in the repo, treat it as legacy/dev-only data rather than the active source of truth for the UI.
+
+## Python DB Schema Init (legacy utility)
 
 There is also a Python helper script to create the same tables in a SQL database:
 
@@ -154,6 +156,8 @@ python scripts/init_db.py
 ```
 
 It uses `DATABASE_URL` (defaults to SQLite). For other SQL engines later, point `DATABASE_URL` at your rollout database.
+
+This helper is not used by the current browser app at runtime.
 
 Dependencies for that script:
 
