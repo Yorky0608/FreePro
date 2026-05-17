@@ -10,8 +10,8 @@ if (!app) {
 	throw new Error('Missing #app element')
 }
 
-const desktop = /** @type {any} */ (globalThis?.desktop)
-const isDesktopApp = Boolean(desktop?.auth?.login && desktop?.profile?.getGoal && desktop?.ledger?.listEntries)
+const desktop = null
+const isDesktopApp = false
 
 const DEFAULT_API_BASE_URL = 'https://1wos40ydh1.execute-api.us-east-2.amazonaws.com'
 const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (import.meta.env.DEV ? '/api' : DEFAULT_API_BASE_URL)
@@ -32,6 +32,7 @@ let profileSettings = {
 	weaknesses: '',
 }
 let ledgerEntryMetaByClientId = {}
+let savingsLogEntries = []
 let weeklyReports = []
 let journalEntries = []
 let dailyReportWeekMs = startOfLocalWeekMs(new Date())
@@ -96,13 +97,32 @@ function getCurrentWeekdayIndex(date = new Date()) {
 	return (new Date(date).getDay() + 6) % 7
 }
 
-function createEmptyDailyWeek() {
+function getPrimaryHabitBox(state = sanitizeHabitBoardState(habitBoardState)) {
+	return state?.boxes?.[0] || createEmptyHabitBox(0)
+}
+
+function getHabitSquareItems(state = sanitizeHabitBoardState(habitBoardState)) {
+	return getPrimaryHabitBox(state).items || []
+}
+
+function hasHabitBoardSquares(state = sanitizeHabitBoardState(habitBoardState)) {
+	return getHabitSquareItems(state).length > 0
+}
+
+function createHabitChecksArray(count = getHabitSquareItems().length, source = []) {
+	const safeCount = Math.max(0, Number(count) || 0)
+	const checks = Array.isArray(source) ? source.slice(0, safeCount).map(Boolean) : []
+	while (checks.length < safeCount) checks.push(false)
+	return checks
+}
+
+function createEmptyDailyWeek(checkCount = getHabitSquareItems().length) {
 	return {
 		days: new Array(7).fill(null).map(() => ({
 			did: '',
 			didWell: '',
 			couldDoBetter: '',
-			checks: [false, false, false, false],
+			checks: createHabitChecksArray(checkCount),
 			isStarred: false,
 			starredNote: '',
 		})),
@@ -173,6 +193,7 @@ function getRendererAppStateSnapshot() {
 		weeklyReports,
 		journalEntries,
 		ledgerEntryMetaByClientId,
+		savingsLogEntries,
 	}
 }
 
@@ -192,16 +213,17 @@ function formatWeekRangeLabel(weekMs) {
 
 function getDailyWeekState(weekKey = getDailyWeekKey()) {
 	const safeState = sanitizeHabitBoardState(habitBoardState)
-	return safeState.weeksByKey[weekKey] || createEmptyDailyWeek()
+	const checkCount = getHabitSquareItems(safeState).length || 4
+	return safeState.weeksByKey[weekKey] || createEmptyDailyWeek(checkCount)
 }
 
 function setDailyWeekState(weekKey, weekState) {
 	const nextState = sanitizeHabitBoardState(habitBoardState)
-	nextState.weeksByKey[weekKey] = createEmptyDailyWeek()
+	const checkCount = getHabitSquareItems(nextState).length || 4
+	nextState.weeksByKey[weekKey] = createEmptyDailyWeek(checkCount)
 	for (let index = 0; index < 7; index += 1) {
 		const day = weekState?.days?.[index] || {}
-		const checks = Array.isArray(day?.checks) ? day.checks.slice(0, 4).map(Boolean) : [false, false, false, false]
-		while (checks.length < 4) checks.push(false)
+		const checks = createHabitChecksArray(checkCount, day?.checks)
 		nextState.weeksByKey[weekKey].days[index] = {
 			did: sanitizeLongText(day?.did || '', 240),
 			didWell: sanitizeLongText(day?.didWell || '', 240),
@@ -297,17 +319,15 @@ function renderHabitTracker() {
 	}
 	html += '</div>'
 	wrap.innerHTML = html
-	bindStarToggleButtons(document.getElementById('journalForm'))
-	document.getElementById('journalForm')?.addEventListener('submit', (event) => {
-		event.preventDefault()
-		const errorOut = document.getElementById('journalError')
+	const journalForm = document.getElementById('journalForm')
+	const readJournalFormEntry = () => {
 		const starredSections = {
 			financial: readStarredSection('journalStarFinancial'),
 			jobs: readStarredSection('journalStarJobs'),
 			lessons: readStarredSection('journalStarLessons'),
 			meaningfulWork: readStarredSection('journalStarMeaningfulWork'),
 		}
-		const entry = sanitizeJournalEntry({
+		return sanitizeJournalEntry({
 			month: getCurrentMonthIso(),
 			own: document.getElementById('journalOwn')?.value,
 			owe: document.getElementById('journalOwe')?.value,
@@ -328,11 +348,29 @@ function renderHabitTracker() {
 			starredNote: '',
 			starredSections,
 		})
+	}
+	const persistCurrentJournalForm = () => {
+		const entry = readJournalFormEntry()
 		const nextEntries = journalEntries.slice()
 		const idx = nextEntries.findIndex((item) => item.month === entry.month)
 		if (idx >= 0) nextEntries[idx] = entry
 		else nextEntries.push(entry)
 		saveJournalEntriesToStorage(nextEntries)
+	}
+	bindStarToggleButtons(journalForm)
+	journalForm?.addEventListener('input', () => {
+		persistCurrentJournalForm()
+	})
+	journalForm?.addEventListener('click', (event) => {
+		const target = /** @type {HTMLElement | null} */ (event.target)
+		if (target?.closest?.('[data-star-toggle]')) {
+			persistCurrentJournalForm()
+		}
+	})
+	journalForm?.addEventListener('submit', (event) => {
+		event.preventDefault()
+		const errorOut = document.getElementById('journalError')
+		persistCurrentJournalForm()
 		if (errorOut) {
 			errorOut.hidden = true
 			errorOut.textContent = ''
@@ -358,27 +396,14 @@ function renderWeeklyReport() {
 	wrap.innerHTML = html
 	const weeklyReportForm = document.getElementById('weeklyReportForm')
 	bindStarToggleButtons(weeklyReportForm)
-	const updateWeeklyMargin = () => {
-		const income1 = Number(document.getElementById('weeklyIncomeJob1')?.value || 0)
-		const income2 = Number(document.getElementById('weeklyIncomeJob2')?.value || 0)
-		const expenses = Number(document.getElementById('weeklyReportExpenses')?.value || 0)
-		const marginOut = document.getElementById('weeklyMarginValue')
-		if (marginOut) marginOut.textContent = formatSignedDollars(income1 + income2 - expenses)
-	}
-	weeklyReportForm?.addEventListener('input', (event) => {
-		const target = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (event.target)
-		if (!target) return
-		if (target.id === 'weeklyIncomeJob1' || target.id === 'weeklyIncomeJob2' || target.id === 'weeklyReportExpenses') updateWeeklyMargin()
-	})
-	weeklyReportForm?.addEventListener('submit', (event) => {
-		event.preventDefault()
+	const readWeeklyReportFormEntry = () => {
 		const starredSections = {
 			meetings: readStarredSection('weeklyStarMeetings'),
 			books: readStarredSection('weeklyStarBooks'),
 			lessons: readStarredSection('weeklyStarLessons'),
 			finances: readStarredSection('weeklyStarFinances'),
 		}
-		const entry = sanitizeWeeklyReportEntry({
+		return sanitizeWeeklyReportEntry({
 			week: getCurrentWeekIso(),
 			meetingWho1: document.getElementById('weeklyMeetingWho1')?.value,
 			meetingLearned1: document.getElementById('weeklyMeetingLearned1')?.value,
@@ -401,11 +426,37 @@ function renderWeeklyReport() {
 			starredNote: '',
 			starredSections,
 		})
+	}
+	const persistCurrentWeeklyReportForm = () => {
+		const entry = readWeeklyReportFormEntry()
 		const nextEntries = weeklyReports.slice()
 		const idx = nextEntries.findIndex((item) => item.week === entry.week)
 		if (idx >= 0) nextEntries[idx] = entry
 		else nextEntries.push(entry)
 		saveWeeklyReportsToStorage(nextEntries)
+	}
+	const updateWeeklyMargin = () => {
+		const income1 = Number(document.getElementById('weeklyIncomeJob1')?.value || 0)
+		const income2 = Number(document.getElementById('weeklyIncomeJob2')?.value || 0)
+		const expenses = Number(document.getElementById('weeklyReportExpenses')?.value || 0)
+		const marginOut = document.getElementById('weeklyMarginValue')
+		if (marginOut) marginOut.textContent = formatSignedDollars(income1 + income2 - expenses)
+	}
+	weeklyReportForm?.addEventListener('input', (event) => {
+		const target = /** @type {HTMLInputElement | HTMLTextAreaElement | null} */ (event.target)
+		if (!target) return
+		if (target.id === 'weeklyIncomeJob1' || target.id === 'weeklyIncomeJob2' || target.id === 'weeklyReportExpenses') updateWeeklyMargin()
+		persistCurrentWeeklyReportForm()
+	})
+	weeklyReportForm?.addEventListener('click', (event) => {
+		const target = /** @type {HTMLElement | null} */ (event.target)
+		if (target?.closest?.('[data-star-toggle]')) {
+			persistCurrentWeeklyReportForm()
+		}
+	})
+	weeklyReportForm?.addEventListener('submit', (event) => {
+		event.preventDefault()
+		persistCurrentWeeklyReportForm()
 		renderWeeklyReport()
 		showHabitPopups()
 	})
@@ -479,6 +530,7 @@ updateAuthUi = function() {
 	updateHabitTracker();
 	renderWeeklyReport();
 	renderHabitBoard();
+	renderHabitBoxesPage();
 	renderSettingsPanel();
 };
 
@@ -493,6 +545,7 @@ app.innerHTML = `
 					<a class="topbar-link" href="#journal">Journal</a>
 					<a class="topbar-link" href="#weekly">Weekly Report</a>
 					<a class="topbar-link" href="#habits">Habits</a>
+					<a class="topbar-link" id="habitBoxesNavLink" href="#habit-boxes" hidden>Habit Boxes</a>
 					<a class="topbar-link" href="#settings">Settings</a>
 				</nav>
 			</div>
@@ -667,6 +720,11 @@ app.innerHTML = `
 		<section class="panel" id="habits" aria-label="Habit Tracker" hidden>
 			<h2>Habit Tracker</h2>
 			<div id="habitBoardWrap"></div>
+		</section>
+
+		<section class="panel" id="habit-boxes" aria-label="Habit Boxes" hidden>
+			<h2>Habit Boxes</h2>
+			<div id="habitBoxesWrap"></div>
 		</section>
 
 		<section class="panel" id="settings" aria-label="Settings" hidden>
@@ -851,6 +909,8 @@ const entryFundOtherAmountInput = /** @type {HTMLInputElement} */ (document.quer
 const entryAddBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#entryAddBtn'))
 const entryError = /** @type {HTMLDivElement} */ (document.querySelector('#entryError'))
 const habitBoardWrap = /** @type {HTMLDivElement} */ (document.querySelector('#habitBoardWrap'))
+const habitBoxesWrap = /** @type {HTMLDivElement} */ (document.querySelector('#habitBoxesWrap'))
+const habitBoxesNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#habitBoxesNavLink'))
 const weeklyReportWrap = /** @type {HTMLDivElement} */ (document.querySelector('#weeklyReportWrap'))
 const settingsWrap = /** @type {HTMLDivElement} */ (document.querySelector('#settingsWrap'))
 
@@ -901,6 +961,7 @@ const PROGRAM_YEARS = 4
 const HABIT_BOARD_STORAGE_PREFIX = 'freedom-program:habit-board:v1:'
 const PROFILE_SETTINGS_STORAGE_PREFIX = 'freedom-program:profile-settings:v1:'
 const LEDGER_META_STORAGE_PREFIX = 'freedom-program:ledger-meta:v1:'
+const SAVINGS_LOG_STORAGE_PREFIX = 'freedom-program:savings-log:v1:'
 const DEFAULT_FUND_NAMES = ['E-Fund', 'Car Fund', 'Next Big Fund']
 const DEFAULT_EXPENSE_CATEGORIES = ['Housing', 'Transportation', 'Food', 'Utilities', 'Health', 'Education', 'Other']
 
@@ -985,19 +1046,54 @@ function sanitizeProfileSettings(value) {
 }
 
 function createDefaultHabitBoardState() {
+	return createEmptyHabitBoardState()
+}
+
+function createEmptyHabitBox(index = 0) {
 	return {
-		items: [
-			{ id: 'habit-1', icon: 'W', title: 'Wake up on time', description: 'Show up on time and ready to work.' },
-			{ id: 'habit-2', icon: 'A', title: 'Attitude', description: 'Keep a strong attitude and stay teachable.' },
-			{ id: 'habit-3', icon: 'D', title: 'Do the work', description: 'Finish the next right task with effort.' },
-			{ id: 'habit-4', icon: 'E', title: 'Eye open', description: 'Stay alert for opportunities and next steps.' },
-		],
+		id: `habit-box-${index + 1}`,
+		title: index === 0 ? 'Habit board' : `Habit box ${index + 1}`,
+		description: 'Add squares to define the habits you want to track.',
+		checks: [],
+		items: [],
+	}
+}
+
+function createEmptyHabitBoardState() {
+	return {
+		items: [],
+		boxes: [createEmptyHabitBox(0)],
 		weeksByKey: {},
 	}
 }
 
+function createDefaultHabitSquare(index = 0, source = {}) {
+	return {
+		id: sanitizeShortText(source?.id || `habit-square-${index + 1}`, 80),
+		icon: sanitizeShortText(source?.icon || String(index + 1), 10),
+		title: sanitizeShortText(source?.title || `Square ${index + 1}`, 60),
+		description: sanitizeLongText(source?.description || 'Describe what completing this square means.', 180),
+	}
+}
+
+function createDefaultHabitBox(index = 0, sourceItems = []) {
+	const fallbackItems = Array.isArray(sourceItems) && sourceItems.length ? sourceItems : [
+		{ icon: '1', title: 'Square 1', description: 'Describe what completing this square means.' },
+		{ icon: '2', title: 'Square 2', description: 'Describe what completing this square means.' },
+		{ icon: '3', title: 'Square 3', description: 'Describe what completing this square means.' },
+		{ icon: '4', title: 'Square 4', description: 'Describe what completing this square means.' },
+	]
+	return {
+		id: `habit-box-${index + 1}`,
+		title: index === 0 ? 'Habit board' : `Habit box ${index + 1}`,
+		description: 'Click a square when you complete it, then use the ledger to define what it means.',
+		checks: [false, false, false, false],
+		items: new Array(4).fill(null).map((_, itemIndex) => createDefaultHabitSquare(itemIndex, fallbackItems[itemIndex] || {})),
+	}
+}
+
 function sanitizeHabitBoardState(value) {
-	const base = createDefaultHabitBoardState()
+	const base = createEmptyHabitBoardState()
 	const rawItems = Array.isArray(value?.items) ? value.items.slice(0, 4) : []
 	const items = base.items.map((item, index) => {
 		const next = rawItems[index] || item
@@ -1008,6 +1104,36 @@ function sanitizeHabitBoardState(value) {
 			description: sanitizeLongText(next?.description || item.description, 180),
 		}
 	})
+	const rawBoxes = Array.isArray(value?.boxes) && value.boxes.length
+		? value.boxes.slice(0, 24)
+		: []
+	const flattenedSquares = []
+	const flattenedChecks = []
+	for (const [boxIndex, boxValue] of rawBoxes.entries()) {
+		const fallbackBox = createDefaultHabitBox(boxIndex, items)
+		const rawBoxItems = Array.isArray(boxValue?.items) && boxValue.items.length ? boxValue.items.slice(0, 24) : fallbackBox.items
+		const rawChecks = Array.isArray(boxValue?.checks) ? boxValue.checks.map(Boolean) : fallbackBox.checks
+		for (let itemIndex = 0; itemIndex < rawBoxItems.length; itemIndex += 1) {
+			flattenedSquares.push(createDefaultHabitSquare(flattenedSquares.length, rawBoxItems[itemIndex] || fallbackBox.items[itemIndex] || {}))
+			flattenedChecks.push(Boolean(rawChecks[itemIndex]))
+		}
+	}
+	const mergedSquares = flattenedSquares.length ? flattenedSquares.slice(0, 24) : items.map((item, index) => createDefaultHabitSquare(index, item))
+	const mergedChecks = mergedSquares.map((_, index) => Boolean(flattenedChecks[index]))
+	const primaryBox = rawBoxes[0] || createEmptyHabitBox(0)
+	const legacyItems = mergedSquares.slice(0, 4).map((item, index) => ({
+		id: `habit-${index + 1}`,
+		icon: sanitizeShortText(item?.icon || String(index + 1), 10),
+		title: sanitizeShortText(item?.title || `Square ${index + 1}`, 60),
+		description: sanitizeLongText(item?.description || 'Describe what completing this square means.', 180),
+	}))
+	const boxes = [{
+		id: sanitizeShortText(primaryBox?.id || 'habit-board-1', 80) || 'habit-board-1',
+		title: sanitizeShortText(primaryBox?.title || 'Habit board', 80),
+		description: sanitizeLongText(primaryBox?.description || 'Add squares to define the habits you want to track.', 200),
+		checks: mergedChecks,
+		items: mergedSquares,
+	}]
 	const weeksByKey = {}
 	for (const [weekKey, weekValue] of Object.entries(value?.weeksByKey || {})) {
 		const safeWeekKey = sanitizeDateString(weekKey, startOfLocalWeekMs(new Date()))
@@ -1015,8 +1141,7 @@ function sanitizeHabitBoardState(value) {
 		weeksByKey[safeWeekKey] = {
 			days: new Array(7).fill(null).map((_, index) => {
 				const day = rawDays[index] || {}
-				const checks = Array.isArray(day?.checks) ? day.checks.slice(0, 4).map(Boolean) : [false, false, false, false]
-				while (checks.length < 4) checks.push(false)
+				const checks = createHabitChecksArray(mergedSquares.length || 4, day?.checks)
 				return {
 					did: sanitizeLongText(day?.did || '', 240),
 					didWell: sanitizeLongText(day?.didWell || '', 240),
@@ -1028,7 +1153,7 @@ function sanitizeHabitBoardState(value) {
 			}),
 		}
 	}
-	return { items, weeksByKey }
+	return { items: legacyItems, boxes, weeksByKey }
 }
 
 function sanitizeWeeklyReportEntry(value) {
@@ -1160,27 +1285,8 @@ async function loadUserScopedAppState() {
 		weeklyReports = []
 		journalEntries = []
 		ledgerEntryMetaByClientId = {}
+		savingsLogEntries = []
 		return
-	}
-	if (isDesktopApp && desktop?.appState?.getRendererState) {
-		try {
-			const savedState = await desktop.appState.getRendererState()
-			const loadedSettings = savedState?.profileSettings || {}
-			profileSettings = sanitizeProfileSettings({
-				...loadedSettings,
-				name: loadedSettings?.name || session?.name || '',
-				email: loadedSettings?.email || session?.email || '',
-			})
-			habitBoardState = sanitizeHabitBoardState(savedState?.habitBoardState || createDefaultHabitBoardState())
-			weeklyReports = (Array.isArray(savedState?.weeklyReports) ? savedState.weeklyReports : []).map(sanitizeWeeklyReportEntry).sort((a, b) => b.week.localeCompare(a.week))
-			journalEntries = (Array.isArray(savedState?.journalEntries) ? savedState.journalEntries : []).map(sanitizeJournalEntry).sort((a, b) => b.month.localeCompare(a.month))
-			ledgerEntryMetaByClientId = Object.fromEntries(
-				Object.entries(savedState?.ledgerEntryMetaByClientId || {}).map(([clientId, entryMeta]) => [clientId, sanitizeLedgerEntryMeta(entryMeta)])
-			)
-			return
-		} catch {
-			// fall back to local storage
-		}
 	}
 	const loadedSettings = loadScopedJson(PROFILE_SETTINGS_STORAGE_PREFIX, createDefaultProfileSettings())
 	profileSettings = sanitizeProfileSettings({
@@ -1195,6 +1301,10 @@ async function loadUserScopedAppState() {
 	ledgerEntryMetaByClientId = Object.fromEntries(
 		Object.entries(meta || {}).map(([clientId, entryMeta]) => [clientId, sanitizeLedgerEntryMeta(entryMeta)])
 	)
+	savingsLogEntries = loadScopedArray(SAVINGS_LOG_STORAGE_PREFIX)
+		.map((entry) => ({ month: Number(entry?.month), dollars: Math.max(0, Math.round(Number(entry?.dollars) || 0)) }))
+		.filter((entry) => Number.isFinite(entry.month) && entry.month > 0)
+		.sort((a, b) => a.month - b.month)
 }
 
 function saveProfileSettingsToStorage(nextSettings) {
@@ -1223,6 +1333,15 @@ function saveJournalEntriesToStorage(nextJournalEntries) {
 
 function saveLedgerEntryMetaToStorage() {
 	saveScopedJson(LEDGER_META_STORAGE_PREFIX, ledgerEntryMetaByClientId)
+	void persistDesktopRendererState()
+}
+
+function saveSavingsLogEntriesToStorage(nextSavingsLogEntries) {
+	savingsLogEntries = (Array.isArray(nextSavingsLogEntries) ? nextSavingsLogEntries : [])
+		.map((entry) => ({ month: Number(entry?.month), dollars: Math.max(0, Math.round(Number(entry?.dollars) || 0)) }))
+		.filter((entry) => Number.isFinite(entry.month) && entry.month > 0)
+		.sort((a, b) => a.month - b.month)
+	saveScopedJson(SAVINGS_LOG_STORAGE_PREFIX, savingsLogEntries)
 	void persistDesktopRendererState()
 }
 
@@ -1416,6 +1535,45 @@ async function loadLedgerEntriesFromDesktop() {
 	}
 }
 
+async function loadSavingsLogEntriesFromDesktop() {
+	if (!isDesktopApp) return
+	if (!session) {
+		savingsLogEntries = []
+		return
+	}
+	try {
+		const rows = await desktop.savings.getLog()
+		saveSavingsLogEntriesToStorage(Array.isArray(rows) ? rows : [])
+	} catch {
+		savingsLogEntries = []
+	}
+}
+
+function mergeSavingsSnapshot(monthMs, dollars) {
+	const safeMonthMs = Math.round(Number(monthMs) || 0)
+	const safeDollars = Math.max(0, Math.round(Number(dollars) || 0))
+	if (!Number.isFinite(safeMonthMs) || safeMonthMs <= 0) return
+	const next = savingsLogEntries.slice()
+	const index = next.findIndex((entry) => Number(entry?.month) === safeMonthMs)
+	if (index >= 0) next[index] = { month: safeMonthMs, dollars: safeDollars }
+	else next.push({ month: safeMonthMs, dollars: safeDollars })
+	saveSavingsLogEntriesToStorage(next)
+}
+
+async function syncCurrentSavingsSnapshotFromLedger() {
+	if (!session) return
+	const currentDollars = sumLedgerSavingsSince(getGoalTimeline().startMs)
+	const monthMs = startOfLocalMonthMs(new Date())
+	mergeSavingsSnapshot(monthMs, currentDollars)
+	if (isDesktopApp && desktop?.savings?.upsertMonth) {
+		try {
+			await desktop.savings.upsertMonth(monthMs, currentDollars)
+		} catch {
+			// ignore snapshot sync failures; ledger save already succeeded
+		}
+	}
+}
+
 async function loadLedgerEntriesFromStorage() {
 	if (!session) {
 		ledgerEntries = []
@@ -1468,6 +1626,7 @@ async function cloudLedgerPull({ token, sinceMs }) {
 }
 
 async function cloudLedgerUpsert({ token, entry }) {
+	const meta = getLedgerEntryMeta(entry?.clientId)
 	return apiJson({
 		method: 'POST',
 		apiPath: LEDGER_CLOUD_UPSERT_PATH,
@@ -1478,6 +1637,11 @@ async function cloudLedgerUpsert({ token, entry }) {
 			incomeDollars: entry.incomeDollars,
 			expensesDollars: entry.expensesDollars,
 			savingsDollars: entry.savingsDollars,
+			incomeSource: meta.incomeSource,
+			incomeNote: meta.incomeNote,
+			expenseCategory: meta.expenseCategory,
+			expenseNote: meta.expenseNote,
+			funds: meta.funds,
 			createdAtMs: entry.createdAtMs,
 			updatedAtMs: entry.updatedAtMs,
 		},
@@ -1510,6 +1674,13 @@ async function syncLedgerWithCloud() {
 				if (!clientId) continue
 				if (!Number.isFinite(dayMs) || dayMs <= 0) continue
 				if (Number.isFinite(updatedAtMs) && updatedAtMs > maxSeen) maxSeen = updatedAtMs
+				setLedgerEntryMeta(clientId, {
+					incomeSource: item?.incomeSource,
+					incomeNote: item?.incomeNote,
+					expenseCategory: item?.expenseCategory,
+					expenseNote: item?.expenseNote,
+					funds: item?.funds,
+				})
 				await upsertLedgerEntryLocally({
 					id: clientId,
 					clientId,
@@ -1580,6 +1751,7 @@ async function addLedgerEntry({ dayMs, incomeDollars, expensesDollars, savingsDo
 		const id = Number(out?.id)
 		ledgerEntries.push({ ...entry, id: Number.isFinite(id) && id > 0 ? id : entry.id })
 		ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
+		await syncCurrentSavingsSnapshotFromLedger()
 		enqueueLedgerForCloudSync(entry.clientId)
 		void syncLedgerWithCloud()
 		return entry
@@ -1588,6 +1760,7 @@ async function addLedgerEntry({ dayMs, incomeDollars, expensesDollars, savingsDo
 	ledgerEntries.push(entry)
 	ledgerEntries.sort((a, b) => a.dayMs - b.dayMs)
 	saveLedgerToLocalStorage()
+	await syncCurrentSavingsSnapshotFromLedger()
 	enqueueLedgerForCloudSync(entry.clientId)
 	void syncLedgerWithCloud()
 	return entry
@@ -1643,17 +1816,18 @@ const detailsSection = /** @type {HTMLElement} */ (document.querySelector('#deta
 const journalSection = /** @type {HTMLElement} */ (document.querySelector('#journal'))
 const weeklySection = /** @type {HTMLElement} */ (document.querySelector('#weekly'))
 const habitsSection = /** @type {HTMLElement} */ (document.querySelector('#habits'))
+const habitBoxesSection = /** @type {HTMLElement} */ (document.querySelector('#habit-boxes'))
 const settingsSection = /** @type {HTMLElement} */ (document.querySelector('#settings'))
 
 function normalizeRoute(hash) {
 	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
-	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'settings'])
+	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'habit-boxes', 'settings'])
 	return allowed.has(raw) ? raw : 'dashboard'
 }
 
 function renderRoute() {
 	const route = normalizeRoute(location.hash)
-	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'settings'
+	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'habit-boxes' || route === 'settings'
 	const authed = Boolean(session)
 	const target = needsAuth && !authed ? 'dashboard' : route
 
@@ -1663,12 +1837,14 @@ function renderRoute() {
 	if (journalSection) journalSection.hidden = target !== 'journal'
 	if (weeklySection) weeklySection.hidden = target !== 'weekly'
 	if (habitsSection) habitsSection.hidden = target !== 'habits'
+	if (habitBoxesSection) habitBoxesSection.hidden = target !== 'habit-boxes'
 	if (settingsSection) settingsSection.hidden = target !== 'settings'
 
 	// Ensure charts render when navigating to details.
 	if (target === 'details') drawDetails()
 	if (target === 'weekly') renderWeeklyReport()
 	if (target === 'habits') renderHabitBoard()
+	if (target === 'habit-boxes') renderHabitBoxesPage()
 	if (target === 'settings') renderSettingsPanel()
 
 	// Avoid weird scroll positions when switching pages.
@@ -1694,6 +1870,16 @@ function renderRoute() {
 
 window.addEventListener('hashchange', renderRoute)
 renderRoute()
+
+window.addEventListener('focus', () => {
+	void refreshDesktopCloudBackedState()
+})
+
+document.addEventListener('visibilitychange', () => {
+	if (document.visibilityState === 'visible') {
+		void refreshDesktopCloudBackedState()
+	}
+})
 
 updateAuthUi()
 void refreshSessionAndLoad()
@@ -1971,6 +2157,7 @@ function warnWebSyncIfNeeded(err) {
 
 function updateAuthUi() {
 	if (!authStatus || !logoutBtn || !authForm) return
+	if (habitBoxesNavLink) habitBoxesNavLink.hidden = true
 
 	if (session) {
 		const cloudStatus = isDesktopApp ? (session?.token ? ' (cloud sync ON)' : ' (cloud sync OFF)') : ''
@@ -2107,6 +2294,7 @@ async function refreshSessionAndLoad() {
 		if (session) {
 			await hydrateProfileNameFromCloud()
 			await loadGoalFromDbOrMigrate()
+			await loadSavingsLogEntriesFromDesktop()
 			await loadLedgerEntriesFromStorage()
 			void syncLedgerWithCloud()
 		}
@@ -2123,6 +2311,16 @@ async function refreshSessionAndLoad() {
 		await loadLedgerEntriesFromStorage()
 		void syncLedgerWithCloud()
 	}
+	updateProgress()
+	renderRoute()
+}
+
+async function refreshDesktopCloudBackedState() {
+	if (!isDesktopApp || !session) return
+	await loadUserScopedAppState()
+	await loadGoalFromDbOrMigrate()
+	await loadSavingsLogEntriesFromDesktop()
+	updateAuthUi()
 	updateProgress()
 	renderRoute()
 }
@@ -2152,7 +2350,6 @@ async function loadGoalFromCloudOrFallback() {
 
 let suppressGoalPersist = false
 let goalTimer = null
-let didWarnDesktopGoalSync = false
 
 function updateGoalSliderUi() {
 	if (range) range.disabled = isGoalSliderLocked
@@ -2211,20 +2408,6 @@ async function loadGoalFromDbOrMigrate() {
 async function persistGoalDollars(goalDollars) {
 	const safe = Math.max(0, Math.round(goalDollars))
 	saveGoalDollarsToLocalStorage(safe)
-
-	if (isDesktopApp) {
-		if (!session) return
-		if (!desktop?.profile?.setGoal) return
-		try {
-			await desktop.profile.setGoal(safe)
-		} catch {
-			if (!didWarnDesktopGoalSync) {
-				didWarnDesktopGoalSync = true
-				showAuthError('Saving your goal failed in the desktop app.')
-			}
-		}
-		return
-	}
 
 	if (!session?.token) return
 	try {
@@ -2301,7 +2484,11 @@ function sumLedgerSavingsSince(startDayMs) {
 
 function getCurrentSavingsForGoalProgress() {
 	if (!session) return 0
-	return sumLedgerSavingsSince(getGoalTimeline().startMs)
+	const ledgerSavings = sumLedgerSavingsSince(getGoalTimeline().startMs)
+	const latestSavedBalance = savingsLogEntries.length
+		? Math.max(0, Number(savingsLogEntries[savingsLogEntries.length - 1]?.dollars) || 0)
+		: 0
+	return latestSavedBalance > 0 ? latestSavedBalance : ledgerSavings
 }
 
 function getWeeklyGoalSnapshot(goalDollars, currentDollars, timeline = getGoalTimeline()) {
@@ -2400,7 +2587,21 @@ function renderHabitBoard() {
 		return
 	}
 	const safeState = sanitizeHabitBoardState(habitBoardState)
-	const items = safeState.items
+	const items = getHabitSquareItems(safeState)
+	if (!items.length) {
+		habitBoardWrap.innerHTML = `
+			<div class="habit-gate">
+				<div class="habit-kicker">Habit Tracker</div>
+				<h3 class="report-title">Start with a blank board</h3>
+				<p class="habit-copy">Build your squares in Habit Boxes first. Once you save them, this page will use them right away.</p>
+				<div class="auth-actions">
+					<button type="button" class="auth-btn" data-action="open-habit-boxes">Set up Habit Boxes</button>
+				</div>
+			</div>
+		`
+		ensureHabitBoardInteractionsBound()
+		return
+	}
 	const currentWeekMs = startOfLocalWeekMs(new Date())
 	if (dailyReportWeekMs > currentWeekMs) setDailyReportWeek(currentWeekMs)
 	const weekMs = startOfLocalWeekMs(new Date(dailyReportWeekMs))
@@ -2413,14 +2614,16 @@ function renderHabitBoard() {
 	const focusedDay = weekState.days[safeDayIndex]
 	const focusedDayMs = weekMs + (safeDayIndex * DAY_MS)
 	const isCurrentWeek = weekMs === currentWeekMs
+	const weeklyTotal = items.length * 7
 	habitBoardWrap.innerHTML = `
 		<div class="daily-report-shell">
 			<div class="habit-board-head">
 				<div>
 					<div class="habit-kicker">Daily Report</div>
 					<p class="habit-copy">Focus on one day at a time, then use the weekly recap to review earlier days and move backward through previous weeks.</p>
+					<button type="button" class="auth-btn auth-btn--secondary" data-action="open-habit-boxes">Edit Habit Boxes</button>
 				</div>
-				<div class="habit-board-score">Week of ${escapeHtml(formatDateLabel(weekKey))} · ${completedCount}/28 habits checked</div>
+				<div class="habit-board-score">Week of ${escapeHtml(formatDateLabel(weekKey))} · ${completedCount}/${weeklyTotal} habits checked</div>
 			</div>
 			<div class="daily-week-nav">
 				<button type="button" class="auth-btn auth-btn--secondary" data-action="prev-week">Previous Week</button>
@@ -2439,7 +2642,7 @@ function renderHabitBoard() {
 							<p class="habit-copy">${escapeHtml(formatDateLabel(focusedDayMs))}</p>
 						</div>
 						<div class="daily-focus-meta">
-							<span class="habit-card-chip">${focusedDay.checks.filter(Boolean).length}/4 habits</span>
+							<span class="habit-card-chip">${focusedDay.checks.filter(Boolean).length}/${items.length} habits</span>
 							${focusedDay.isStarred ? '<span class="habit-card-chip">Starred</span>' : ''}
 						</div>
 					</div>
@@ -2455,83 +2658,252 @@ function renderHabitBoard() {
 				</div>
 				<div class="daily-side-card">
 					<div class="report-block-title">Weekly Recap</div>
-					<div class="daily-week-recap">${weekState.days.map((day, dayIndex) => `<button type="button" class="daily-recap-item ${dayIndex === safeDayIndex ? 'daily-recap-item--active' : ''}" data-action="set-day" data-day-index="${dayIndex}"><strong>${escapeHtml(dayLabels[dayIndex])}</strong><span>${day.checks.filter(Boolean).length}/4 habits${day.isStarred ? ' · starred' : ''}</span><p>${escapeHtml(truncateText(day.didWell || day.did || day.couldDoBetter || 'No notes yet.'))}</p></button>`).join('')}</div>
+					<div class="daily-week-recap">${weekState.days.map((day, dayIndex) => `<button type="button" class="daily-recap-item ${dayIndex === safeDayIndex ? 'daily-recap-item--active' : ''}" data-action="set-day" data-day-index="${dayIndex}"><strong>${escapeHtml(dayLabels[dayIndex])}</strong><span>${day.checks.filter(Boolean).length}/${items.length} habits${day.isStarred ? ' · starred' : ''}</span><p>${escapeHtml(truncateText(day.didWell || day.did || day.couldDoBetter || 'No notes yet.'))}</p></button>`).join('')}</div>
 					<div class="daily-ledger-head"><div class="report-block-title">Habit Ledger</div><button type="button" class="auth-btn auth-btn--secondary" data-action="toggle-ledger-editor">${isHabitLedgerEditorOpen ? 'Done Editing' : 'Edit Ledger'}</button></div>
 					${isHabitLedgerEditorOpen ? `<div class="daily-ledger-editor">${items.map((item, index) => `<div class="daily-habit-chip"><label class="auth-label"><span>Habit ${index + 1} icon</span><input class="auth-input" data-field="icon" data-index="${index}" maxlength="10" value="${escapeHtml(item.icon)}" /></label><label class="auth-label"><span>Habit title</span><input class="auth-input" data-field="title" data-index="${index}" maxlength="60" value="${escapeHtml(item.title)}" /></label><label class="auth-label auth-label--wide"><span>Quick meaning</span><textarea class="auth-input habit-textarea" data-field="description" data-index="${index}" rows="3">${escapeHtml(item.description)}</textarea></label></div>`).join('')}</div>` : `<div class="habit-board-ledger">${items.map((item, index) => `<div class="habit-board-ledger-item"><strong>${escapeHtml(item.icon || String(index + 1))}</strong><span>${escapeHtml(item.title || `Habit ${index + 1}`)}</span><p>${escapeHtml(item.description || 'Add a quick meaning for this square.')}</p></div>`).join('')}</div>`}
 				</div>
 			</div>
 		</div>
 	`
-	if (!habitBoardWrap.dataset.bound) {
-		habitBoardWrap.addEventListener('click', (event) => {
+	ensureHabitBoardInteractionsBound()
+}
+
+function ensureHabitBoardInteractionsBound() {
+	if (!habitBoardWrap || habitBoardWrap.dataset.bound) return
+	habitBoardWrap.addEventListener('click', (event) => {
+		const target = /** @type {HTMLElement} */ (event.target)
+		const actionTarget = target?.closest?.('[data-action]')
+		const action = String(actionTarget?.dataset?.action || '')
+		if (!action) return
+		if (action === 'open-habit-boxes') {
+			location.hash = '#habit-boxes'
+			return
+		}
+		if (action === 'prev-week') {
+			setDailyReportWeek(dailyReportWeekMs - (7 * DAY_MS))
+			renderHabitBoard()
+			return
+		}
+		if (action === 'next-week') {
+			setDailyReportWeek(Math.min(startOfLocalWeekMs(new Date()), dailyReportWeekMs + (7 * DAY_MS)))
+			renderHabitBoard()
+			return
+		}
+		if (action === 'set-day') {
+			const nextDayIndex = Number(actionTarget.dataset.dayIndex)
+			if (!Number.isFinite(nextDayIndex)) return
+			dailyReportDayIndex = Math.max(0, Math.min(6, nextDayIndex))
+			renderHabitBoard()
+			return
+		}
+		if (action === 'toggle-ledger-editor') {
+			isHabitLedgerEditorOpen = !isHabitLedgerEditorOpen
+			renderHabitBoard()
+			return
+		}
+		if (action === 'toggle-check') {
+			const dayIndex = Number(actionTarget.dataset.dayIndex)
+			const habitIndex = Number(actionTarget.dataset.habitIndex)
+			if (!Number.isFinite(dayIndex) || !Number.isFinite(habitIndex)) return
+			const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+			nextWeek.days[dayIndex].checks[habitIndex] = !nextWeek.days[dayIndex].checks[habitIndex]
+			setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+			renderHabitBoard()
+			return
+		}
+		if (action === 'toggle-day-star') {
+			const dayIndex = Number(actionTarget.dataset.dayIndex)
+			if (!Number.isFinite(dayIndex)) return
+			const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+			nextWeek.days[dayIndex].isStarred = !nextWeek.days[dayIndex].isStarred
+			setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+			renderHabitBoard()
+		}
+	})
+	habitBoardWrap.addEventListener('input', (event) => {
+		const target = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (event.target)
+		const index = Number(target?.dataset?.index)
+		const field = String(target?.dataset?.field || '')
+		if (Number.isFinite(index) && field) {
+			const next = sanitizeHabitBoardState(habitBoardState)
+			if (!next.boxes[0]?.items?.[index] || !(field in next.boxes[0].items[index])) return
+			next.boxes[0].items[index][field] = target.value
+			next.items = next.boxes[0].items.slice(0, 4).map((item, itemIndex) => ({
+				id: `habit-${itemIndex + 1}`,
+				icon: sanitizeShortText(item?.icon || String(itemIndex + 1), 10),
+				title: sanitizeShortText(item?.title || `Square ${itemIndex + 1}`, 60),
+				description: sanitizeLongText(item?.description || 'Describe what completing this square means.', 180),
+			}))
+			saveHabitBoardToStorage(next)
+			renderHabitBoxesPage()
+			return
+		}
+		const dayIndex = Number(target?.dataset?.dayIndex)
+		const dayField = String(target?.dataset?.dayField || '')
+		if (!Number.isFinite(dayIndex) || !dayField) return
+		const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
+		nextWeek.days[dayIndex][dayField] = target.value
+		setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+	})
+	habitBoardWrap.addEventListener('change', () => {
+		renderHabitBoard()
+	})
+	habitBoardWrap.dataset.bound = 'true'
+}
+
+function renderHabitBoxesPage() {
+	if (!habitBoxesWrap) return
+	if (!session) {
+		habitBoxesWrap.innerHTML = '<div class="habit-gate">Log in to build and track your habit boxes.</div>'
+		return
+	}
+	const safeState = sanitizeHabitBoardState(habitBoardState)
+	const board = safeState.boxes[0] || createEmptyHabitBox(0)
+	const completedSquares = board.checks.filter(Boolean).length
+	const totalSquares = board.items.length
+	habitBoxesWrap.innerHTML = `
+		<div class="habit-boxes-shell">
+			<div class="habit-board-head">
+				<div>
+					<div class="habit-kicker">Habit Boxes</div>
+					<p class="habit-copy">Build one expandable habit board, click each square when you complete it, and keep the meaning of every square in the ledger beside it.</p>
+				</div>
+				<div class="habit-board-score">${completedSquares}/${totalSquares} squares complete</div>
+			</div>
+			<div class="habit-boxes-toolbar">
+				<p class="habit-copy habit-copy--compact">Add squares whenever you want another habit slot. The board grows and the tracker updates as you edit.</p>
+				<div class="auth-actions">
+					<button type="button" class="auth-btn" data-action="add-square">Add Square</button>
+					<button type="button" class="auth-btn auth-btn--secondary" data-action="finish-habit-boxes" ${totalSquares <= 0 ? 'disabled' : ''}>Save and Return to Habits</button>
+				</div>
+			</div>
+			<div class="habit-boxes-grid"><article class="habit-box-card">
+				<div class="habit-box-card-head">
+					<div class="habit-box-card-fields">
+						<label class="auth-label">
+							<span>Board title</span>
+							<input class="auth-input" data-box-index="0" data-box-field="title" maxlength="80" value="${escapeHtml(board.title)}" />
+						</label>
+						<label class="auth-label auth-label--wide">
+							<span>Board note</span>
+							<input class="auth-input" data-box-index="0" data-box-field="description" maxlength="200" value="${escapeHtml(board.description)}" />
+						</label>
+					</div>
+					<div class="habit-box-card-meta">
+						<span class="habit-card-chip">${completedSquares}/${totalSquares} complete</span>
+						<button type="button" class="auth-btn auth-btn--secondary" data-action="clear-board">Clear All</button>
+					</div>
+				</div>
+				<div class="habit-box-layout">
+					<div class="habit-box-stage">
+						<div class="habit-box-grid" data-habit-box-grid role="group" aria-label="${escapeHtml(board.title || 'Habit board')} squares">
+							${board.items.map((item, itemIndex) => `<button type="button" class="habit-box-square ${board.checks[itemIndex] ? 'habit-box-square--active' : ''}" data-action="toggle-box-square" data-box-index="0" data-item-index="${itemIndex}" data-preview-item-index="${itemIndex}" aria-pressed="${board.checks[itemIndex] ? 'true' : 'false'}"><span class="habit-box-square-icon">${escapeHtml(item.icon || String(itemIndex + 1))}</span><small>${escapeHtml(item.title || `Square ${itemIndex + 1}`)}</small></button>`).join('')}
+						</div>
+						<p class="habit-box-stage-copy">${totalSquares > 0 ? 'Click a square to mark that habit complete.' : 'Start by adding your first square, then label it in the ledger.'}</p>
+					</div>
+					<div class="habit-box-ledger-panel">
+						<div class="report-block-title">Square Ledger</div>
+						<div class="habit-box-ledger-list">${board.items.map((item, itemIndex) => `<div class="habit-box-ledger-row"><label class="auth-label"><span>Square ${itemIndex + 1} icon</span><input class="auth-input" data-box-index="0" data-item-index="${itemIndex}" data-item-field="icon" maxlength="10" value="${escapeHtml(item.icon)}" /></label><label class="auth-label"><span>Square label</span><input class="auth-input" data-box-index="0" data-item-index="${itemIndex}" data-item-field="title" maxlength="60" value="${escapeHtml(item.title)}" /></label><label class="auth-label auth-label--wide"><span>Meaning</span><textarea class="auth-input habit-textarea" data-box-index="0" data-item-index="${itemIndex}" data-item-field="description" rows="3">${escapeHtml(item.description)}</textarea></label>${board.items.length > 4 ? `<button type="button" class="auth-btn auth-btn--secondary habit-square-remove" data-action="remove-square" data-box-index="0" data-item-index="${itemIndex}">Remove Square</button>` : ''}</div>`).join('')}</div>
+					</div>
+				</div>
+			</article></div>
+		</div>
+	`
+	if (!habitBoxesWrap.dataset.bound) {
+		habitBoxesWrap.addEventListener('click', (event) => {
 			const target = /** @type {HTMLElement} */ (event.target)
 			const actionTarget = target?.closest?.('[data-action]')
 			const action = String(actionTarget?.dataset?.action || '')
 			if (!action) return
-			if (action === 'prev-week') {
-				setDailyReportWeek(dailyReportWeekMs - (7 * DAY_MS))
-				renderHabitBoard()
+			if (action === 'finish-habit-boxes') {
+				location.hash = '#habits'
 				return
 			}
-			if (action === 'next-week') {
-				setDailyReportWeek(Math.min(currentWeekMs, dailyReportWeekMs + (7 * DAY_MS)))
-				renderHabitBoard()
-				return
-			}
-			if (action === 'set-day') {
-				const nextDayIndex = Number(actionTarget.dataset.dayIndex)
-				if (!Number.isFinite(nextDayIndex)) return
-				dailyReportDayIndex = Math.max(0, Math.min(6, nextDayIndex))
-				renderHabitBoard()
-				return
-			}
-			if (action === 'toggle-ledger-editor') {
-				isHabitLedgerEditorOpen = !isHabitLedgerEditorOpen
-				renderHabitBoard()
-				return
-			}
-			if (action === 'toggle-check') {
-				const dayIndex = Number(actionTarget.dataset.dayIndex)
-				const habitIndex = Number(actionTarget.dataset.habitIndex)
-				if (!Number.isFinite(dayIndex) || !Number.isFinite(habitIndex)) return
-				const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
-				nextWeek.days[dayIndex].checks[habitIndex] = !nextWeek.days[dayIndex].checks[habitIndex]
-				setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
-				renderHabitBoard()
-				return
-			}
-			if (action === 'toggle-day-star') {
-				const dayIndex = Number(actionTarget.dataset.dayIndex)
-				if (!Number.isFinite(dayIndex)) return
-				const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
-				nextWeek.days[dayIndex].isStarred = !nextWeek.days[dayIndex].isStarred
-				setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
-				renderHabitBoard()
-			}
-		})
-		habitBoardWrap.addEventListener('input', (event) => {
-			const target = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (event.target)
-			const index = Number(target?.dataset?.index)
-			const field = String(target?.dataset?.field || '')
-			if (Number.isFinite(index) && field) {
+			if (action === 'add-square') {
 				const next = sanitizeHabitBoardState(habitBoardState)
-				if (!(field in next.items[index])) return
-				next.items[index][field] = target.value
+				const boardState = next.boxes[0] || createEmptyHabitBox(0)
+				const squareIndex = boardState.items.length
+				boardState.items.push(createDefaultHabitSquare(squareIndex))
+				boardState.checks.push(false)
+				next.boxes = [boardState]
 				saveHabitBoardToStorage(next)
+				renderHabitBoard()
+				renderHabitBoxesPage()
 				return
 			}
-			const dayIndex = Number(target?.dataset?.dayIndex)
-			const dayField = String(target?.dataset?.dayField || '')
-			if (!Number.isFinite(dayIndex) || !dayField) return
-			const nextWeek = getDailyWeekState(getDailyWeekKey(dailyReportWeekMs))
-			nextWeek.days[dayIndex][dayField] = target.value
-			setDailyWeekState(getDailyWeekKey(dailyReportWeekMs), nextWeek)
+			const boxIndex = Number(actionTarget?.dataset?.boxIndex)
+			if (action === 'clear-board') {
+				const next = sanitizeHabitBoardState(habitBoardState)
+				next.boxes[0].checks = next.boxes[0].checks.map(() => false)
+				saveHabitBoardToStorage(next)
+				renderHabitBoard()
+				renderHabitBoxesPage()
+				return
+			}
+			if (!Number.isFinite(boxIndex)) return
+			if (action === 'remove-square') {
+				const itemIndex = Number(actionTarget?.dataset?.itemIndex)
+				if (!Number.isFinite(itemIndex)) return
+				const next = sanitizeHabitBoardState(habitBoardState)
+				if (next.boxes[boxIndex].items.length <= 4) return
+				next.boxes[boxIndex].items.splice(itemIndex, 1)
+				next.boxes[boxIndex].checks.splice(itemIndex, 1)
+				saveHabitBoardToStorage(next)
+				renderHabitBoard()
+				renderHabitBoxesPage()
+				return
+			}
+			if (action === 'toggle-box-square') {
+				const itemIndex = Number(actionTarget?.dataset?.itemIndex)
+				if (!Number.isFinite(itemIndex)) return
+				const next = sanitizeHabitBoardState(habitBoardState)
+				next.boxes[boxIndex].checks[itemIndex] = !next.boxes[boxIndex].checks[itemIndex]
+				saveHabitBoardToStorage(next)
+				renderHabitBoard()
+				renderHabitBoxesPage()
+			}
 		})
-		habitBoardWrap.addEventListener('change', () => {
+		habitBoxesWrap.addEventListener('input', (event) => {
+			const target = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (event.target)
+			const boxIndex = Number(target?.dataset?.boxIndex)
+			if (!Number.isFinite(boxIndex)) return
+			const next = sanitizeHabitBoardState(habitBoardState)
+			const boxField = String(target?.dataset?.boxField || '')
+			if (boxField) {
+				next.boxes[boxIndex][boxField] = target.value
+				saveHabitBoardToStorage(next)
+				syncHabitBoxesLivePreview(next)
+				renderHabitBoard()
+				return
+			}
+			const itemIndex = Number(target?.dataset?.itemIndex)
+			const itemField = String(target?.dataset?.itemField || '')
+			if (!Number.isFinite(itemIndex) || !itemField) return
+			next.boxes[boxIndex].items[itemIndex][itemField] = target.value
+			saveHabitBoardToStorage(next)
+			syncHabitBoxesLivePreview(next)
 			renderHabitBoard()
 		})
-		habitBoardWrap.dataset.bound = 'true'
+		habitBoxesWrap.addEventListener('change', () => {
+			renderHabitBoxesPage()
+		})
+		habitBoxesWrap.dataset.bound = 'true'
 	}
+
+function syncHabitBoxesLivePreview(nextState = sanitizeHabitBoardState(habitBoardState)) {
+	if (!habitBoxesWrap) return
+	const board = getPrimaryHabitBox(nextState)
+	const grid = /** @type {HTMLDivElement | null} */ (habitBoxesWrap.querySelector('[data-habit-box-grid]'))
+	if (grid) grid.setAttribute('aria-label', `${board.title || 'Habit board'} squares`)
+	for (const [itemIndex, item] of board.items.entries()) {
+		const button = /** @type {HTMLButtonElement | null} */ (habitBoxesWrap.querySelector(`[data-preview-item-index="${itemIndex}"]`))
+		if (!button) continue
+		const iconOut = button.querySelector('.habit-box-square-icon')
+		const labelOut = button.querySelector('small')
+		if (iconOut) iconOut.textContent = item.icon || String(itemIndex + 1)
+		if (labelOut) labelOut.textContent = item.title || `Square ${itemIndex + 1}`
+	}
+}
 }
 
 function renderSettingsPanel() {
@@ -2581,18 +2953,27 @@ function renderSettingsPanel() {
 		</form>
 	`
 	const settingsForm = document.getElementById('settingsForm')
+	const readSettingsFormValues = () => ({
+		name: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsName'))?.value,
+		email: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsEmail'))?.value,
+		contactInfo: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsContactInfo'))?.value,
+		goalStartDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalStartDate'))?.value,
+		goalEndDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalEndDate'))?.value,
+		strengths: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsStrengths'))?.value,
+		weaknesses: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsWeaknesses'))?.value,
+	})
+	const persistSettingsDraft = () => {
+		saveProfileSettingsToStorage(sanitizeProfileSettings(readSettingsFormValues()))
+	}
+	settingsForm?.addEventListener('input', () => {
+		const settingsMessage = /** @type {HTMLDivElement | null} */ (document.getElementById('settingsMessage'))
+		persistSettingsDraft()
+		if (settingsMessage) settingsMessage.hidden = true
+	})
 	settingsForm?.addEventListener('submit', async (event) => {
 		event.preventDefault()
 		const settingsMessage = /** @type {HTMLDivElement | null} */ (document.getElementById('settingsMessage'))
-		const rawSettings = {
-			name: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsName'))?.value,
-			email: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsEmail'))?.value,
-			contactInfo: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsContactInfo'))?.value,
-			goalStartDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalStartDate'))?.value,
-			goalEndDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalEndDate'))?.value,
-			strengths: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsStrengths'))?.value,
-			weaknesses: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsWeaknesses'))?.value,
-		}
+		const rawSettings = readSettingsFormValues()
 		if (parseDateInputToDayMs(rawSettings.goalEndDate) <= parseDateInputToDayMs(rawSettings.goalStartDate)) {
 			if (settingsMessage) {
 				settingsMessage.textContent = 'End date must be after the start date.'
@@ -3026,6 +3407,7 @@ authForm?.addEventListener('submit', async (e) => {
 		updateAuthUi()
 		if (isDesktopApp) {
 			await loadGoalFromDbOrMigrate()
+			await loadSavingsLogEntriesFromDesktop()
 			await loadLedgerEntriesFromStorage()
 			void syncLedgerWithCloud()
 		} else {

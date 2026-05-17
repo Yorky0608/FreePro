@@ -1,11 +1,11 @@
-# Rocket Slider (Vite + Electron)
+# Rocket Slider (Vite Web App)
 
 A small mockup app: a slider from **0** to **140** that moves a rocket across the track.
 
 ## Requirements
 
 - Node.js (LTS recommended)
-- Windows (this project is set up to run as a Windows desktop app during development)
+- A modern browser
 
 ## Install
 
@@ -53,7 +53,7 @@ To point the web build at a different API base URL, set:
 ## Cloud API (AWS) notes
 
 If your API Gateway routes point at a Lambda, that Lambda must have the required environment variables set.
-If they are missing, endpoints like `POST /auth/login` will return `500 {"message":"Internal Server Error"}` and the desktop app will show `cloud sync OFF`.
+If they are missing, endpoints like `POST /auth/login` will return `500 {"message":"Internal Server Error"}`.
 
 Required Lambda env vars:
 
@@ -127,29 +127,6 @@ Quick verification (should return `401` for bad creds, not `500`):
 node -e "fetch('https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'debug@example.com',password:'notreal'})}).then(async r=>{console.log('status',r.status); console.log('body', (await r.text()).slice(0,200));}).catch(e=>{console.error(e); process.exit(1);});"
 ```
 
-## Run as a desktop app (Electron)
-
-This runs Vite and Electron together (Electron opens a desktop window pointing at the Vite dev server):
-
-```bash
-npm run dev:desktop
-```
-
-If you are in the parent folder (one level above `vite-project/`), you can also run:
-
-```bash
-npm --prefix vite-project run dev:desktop
-```
-
-Notes:
-
-- If you close the Electron window, the command may stop (that’s expected).
-- If you want to re-open just the desktop window while Vite is running, use:
-
-```bash
-npm run dev:electron
-```
-
 ## Build
 
 Build the web assets:
@@ -165,16 +142,8 @@ This outputs a production build into the `dist/` folder.
 - `index.html` – app entry HTML
 - `src/main.js` – UI + slider logic
 - `src/style.css` – theme + styles
-- `electron/main.cjs` – Electron main process (desktop window)
-- `electron/preload.cjs` – safe preload bridge (minimal)
 
-## Desktop Login + Database (SQLite)
-
-When you run the desktop app (`npm run dev:desktop`), savings are stored per-user in a local SQLite database file under Electron's `userData` folder.
-
-- Create an account (email + password) or log in.
-- Savings entries are stored per month for the logged-in user.
-- In plain browser mode (`npm run dev`), the demo continues to use `localStorage`.
+Savings, journals, habits, settings, and ledger data are stored in browser storage for the current prototype flow.
 
 ## Python DB Schema Init (portable)
 

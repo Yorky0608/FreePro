@@ -115,6 +115,11 @@ function createHarness() {
             incomeDollars: ExpressionAttributeValues[':inc'],
             expensesDollars: ExpressionAttributeValues[':exp'],
             savingsDollars: ExpressionAttributeValues[':sav'],
+            incomeSource: ExpressionAttributeValues[':incomeSource'],
+            incomeNote: ExpressionAttributeValues[':incomeNote'],
+            expenseCategory: ExpressionAttributeValues[':expenseCategory'],
+            expenseNote: ExpressionAttributeValues[':expenseNote'],
+            funds: clone(ExpressionAttributeValues[':funds']),
             updatedAtMs: ExpressionAttributeValues[':u'],
             createdAtMs: existing.createdAtMs ?? ExpressionAttributeValues[':c'],
           }
@@ -282,4 +287,49 @@ test('get profile name returns the stored normalized name', async () => {
   assert.equal(res.statusCode, 200)
   const body = JSON.parse(res.body)
   assert.equal(body.name, 'Read Name')
+})
+
+test('ledger routes round-trip richer financial metadata', async () => {
+  const { lambda } = loadLambda()
+
+  const registerRes = await lambda.handler(eventFor('POST /auth/register', {
+    email: 'ledgermeta@example.com',
+    password: 'password123',
+    name: 'Ledger Meta',
+  }))
+  const registerBody = JSON.parse(registerRes.body)
+  const headers = { authorization: `Bearer ${registerBody.token}` }
+
+  const upsertRes = await lambda.handler(eventFor('POST /ledger/upsert', {
+    clientId: 'ledger-meta-1',
+    dayMs: 1715904000000,
+    incomeDollars: 1200,
+    expensesDollars: 300,
+    savingsDollars: 900,
+    incomeSource: ' Paycheck ',
+    incomeNote: ' Main job deposit ',
+    expenseCategory: ' Housing ',
+    expenseNote: ' Rent payment ',
+    funds: {
+      'E-Fund': 400,
+      ' Car Fund ': 200,
+      '': 50,
+      'Bad Fund': -5,
+    },
+  }, headers))
+
+  assert.equal(upsertRes.statusCode, 200)
+  const upsertBody = JSON.parse(upsertRes.body)
+  assert.equal(upsertBody.item.incomeSource, 'Paycheck')
+  assert.equal(upsertBody.item.expenseCategory, 'Housing')
+  assert.deepEqual(upsertBody.item.funds, { 'E-Fund': 400, 'Car Fund': 200 })
+
+  const pullRes = await lambda.handler(eventFor('GET /ledger/pull', null, headers))
+  assert.equal(pullRes.statusCode, 200)
+  const pullBody = JSON.parse(pullRes.body)
+  assert.equal(Array.isArray(pullBody.items), true)
+  assert.equal(pullBody.items.length, 1)
+  assert.equal(pullBody.items[0].incomeNote, 'Main job deposit')
+  assert.equal(pullBody.items[0].expenseNote, 'Rent payment')
+  assert.deepEqual(pullBody.items[0].funds, { 'E-Fund': 400, 'Car Fund': 200 })
 })

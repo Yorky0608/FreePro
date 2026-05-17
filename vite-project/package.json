@@ -3,24 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "electron/main.cjs",
   "dependencies": {
     "bcryptjs": "^3.0.2",
     "sql.js": "^1.13.0"
   },
   "scripts": {
     "dev": "vite",
-    "dev:vite": "vite --host --port 5173 --strictPort",
-    "dev:electron": "wait-on http://localhost:5173 && electron .",
-    "dev:desktop": "concurrently --kill-others-on-fail -n VITE,ELECTRON -c auto npm:dev:vite npm:dev:electron",
     "build": "vite build",
     "postbuild": "node scripts/copy-404.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "^8.0.1",
-    "concurrently": "^9.2.1",
-    "electron": "^38.0.0",
-    "wait-on": "^9.0.4"
+    "vite": "^8.0.1"
   }
 }

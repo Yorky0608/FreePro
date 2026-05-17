@@ -422,6 +422,70 @@ async function handleSetProfileName(event) {
   return json(200, { name: normalizeName(result?.Attributes?.name) })
 }
 
+async function handleGetRendererState(event) {
+  const auth = requireAuth(event)
+
+  const emailLower = normalizeEmail(auth.email)
+  if (!emailLower) return json(401, { error: 'Invalid token (missing email)' })
+
+  const res = await ddb.send(new GetCommand({
+    TableName: USERS_TABLE,
+    Key: { emailLower },
+  }))
+
+  const user = res?.Item || {}
+  let value = null
+  try {
+    value = typeof user.rendererStateJson === 'string' ? JSON.parse(user.rendererStateJson) : null
+  } catch {
+    value = null
+  }
+  const updatedAtMs = Number(user.rendererStateUpdatedAtMs)
+
+  return json(200, {
+    value,
+    updatedAtMs: Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? updatedAtMs : 0,
+  })
+}
+
+async function handleSetRendererState(event) {
+  const auth = requireAuth(event)
+  const body = readJsonBody(event) || {}
+
+  const emailLower = normalizeEmail(auth.email)
+  if (!emailLower) return json(401, { error: 'Invalid token (missing email)' })
+
+  const now = Date.now()
+  const serializedValue = JSON.stringify(body.value ?? null)
+
+  const result = await ddb.send(new UpdateCommand({
+    TableName: USERS_TABLE,
+    Key: { emailLower },
+    ConditionExpression: 'userId = :uid',
+    UpdateExpression: 'SET rendererStateJson = :value, rendererStateUpdatedAtMs = :updatedAtMs',
+    ExpressionAttributeValues: {
+      ':value': serializedValue,
+      ':updatedAtMs': now,
+      ':uid': auth.sub,
+    },
+    ReturnValues: 'ALL_NEW',
+  }))
+
+  let value = null
+  try {
+    value = typeof result?.Attributes?.rendererStateJson === 'string'
+      ? JSON.parse(result.Attributes.rendererStateJson)
+      : null
+  } catch {
+    value = null
+  }
+
+  return json(200, {
+    value,
+    updatedAtMs: Number(result?.Attributes?.rendererStateUpdatedAtMs) || now,
+  })
+}
+
 // ---- NEW: Ledger Sync ----
 function normalizeClientId(clientId) {
   if (typeof clientId !== 'string') return ''
@@ -429,6 +493,24 @@ function normalizeClientId(clientId) {
   // keep it simple; just prevent absurdly large keys
   if (!s || s.length > 200) return ''
   return s
+}
+
+function normalizeLedgerText(value, maxLength) {
+  if (typeof value !== 'string') return ''
+  return value.trim().replace(/\s+/g, ' ').slice(0, maxLength)
+}
+
+function normalizeLedgerFunds(value) {
+  const funds = {}
+  if (!value || typeof value !== 'object') return funds
+  for (const [rawName, rawAmount] of Object.entries(value)) {
+    const fundName = normalizeLedgerText(rawName, 80)
+    const amount = Number(rawAmount)
+    if (!fundName) continue
+    if (!Number.isFinite(amount) || amount < 0) continue
+    funds[fundName] = Math.round(amount)
+  }
+  return funds
 }
 
 async function handleLedgerUpsert(event) {
@@ -445,6 +527,11 @@ async function handleLedgerUpsert(event) {
   const incomeDollars = Number(body.incomeDollars || 0)
   const expensesDollars = Number(body.expensesDollars || 0)
   const savingsDollars = Number(body.savingsDollars || 0)
+  const incomeSource = normalizeLedgerText(body.incomeSource, 120)
+  const incomeNote = normalizeLedgerText(body.incomeNote, 240)
+  const expenseCategory = normalizeLedgerText(body.expenseCategory, 80)
+  const expenseNote = normalizeLedgerText(body.expenseNote, 240)
+  const funds = normalizeLedgerFunds(body.funds)
 
   if (!Number.isFinite(incomeDollars) || incomeDollars < 0) return json(400, { error: 'incomeDollars must be >= 0' })
   if (!Number.isFinite(expensesDollars) || expensesDollars < 0) return json(400, { error: 'expensesDollars must be >= 0' })
@@ -462,6 +549,11 @@ async function handleLedgerUpsert(event) {
       'incomeDollars = :inc',
       'expensesDollars = :exp',
       'savingsDollars = :sav',
+      'incomeSource = :incomeSource',
+      'incomeNote = :incomeNote',
+      'expenseCategory = :expenseCategory',
+      'expenseNote = :expenseNote',
+      'funds = :funds',
       'updatedAtMs = :u',
       'createdAtMs = if_not_exists(createdAtMs, :c)',
     ].join(', '),
@@ -470,6 +562,11 @@ async function handleLedgerUpsert(event) {
       ':inc': Math.max(0, Math.round(incomeDollars)),
       ':exp': Math.max(0, Math.round(expensesDollars)),
       ':sav': Math.max(0, Math.round(savingsDollars)),
+      ':incomeSource': incomeSource,
+      ':incomeNote': incomeNote,
+      ':expenseCategory': expenseCategory,
+      ':expenseNote': expenseNote,
+      ':funds': funds,
       ':u': now,
       ':c': createdAtMs,
     },
@@ -536,6 +633,8 @@ exports.handler = async (event) => {
       if (routeKey === 'POST /profile/goal') return await handleSetGoal(event)
       if (routeKey === 'GET /profile/name') return await handleGetProfileName(event)
       if (routeKey === 'POST /profile/name') return await handleSetProfileName(event)
+      if (routeKey === 'GET /profile/renderer-state') return await handleGetRendererState(event)
+      if (routeKey === 'POST /profile/renderer-state') return await handleSetRendererState(event)
 
       if (routeKey === 'GET /ledger/pull') return await handleLedgerPull(event)
       if (routeKey === 'POST /ledger/upsert') return await handleLedgerUpsert(event)
@@ -552,6 +651,8 @@ exports.handler = async (event) => {
     if (method === 'POST' && path.endsWith('/profile/goal')) return await handleSetGoal(event)
     if (method === 'GET' && path.endsWith('/profile/name')) return await handleGetProfileName(event)
     if (method === 'POST' && path.endsWith('/profile/name')) return await handleSetProfileName(event)
+    if (method === 'GET' && path.endsWith('/profile/renderer-state')) return await handleGetRendererState(event)
+    if (method === 'POST' && path.endsWith('/profile/renderer-state')) return await handleSetRendererState(event)
 
     if (method === 'GET' && path.endsWith('/ledger/pull')) return await handleLedgerPull(event)
     if (method === 'POST' && path.endsWith('/ledger/upsert')) return await handleLedgerUpsert(event)

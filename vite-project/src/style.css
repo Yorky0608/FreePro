@@ -1281,7 +1281,7 @@ select.auth-input option {
 
 .daily-report-checks {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 8px;
   padding: 10px;
   border: 1px solid var(--border);
@@ -1417,6 +1417,152 @@ select.auth-input option {
   color: var(--accent);
 }
 
+.habit-copy--compact {
+  margin: 0;
+}
+
+.habit-boxes-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.habit-boxes-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+}
+
+.habit-boxes-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.habit-box-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 14px;
+}
+
+.habit-box-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.habit-box-card-fields {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.habit-box-card-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.habit-box-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.95fr) minmax(0, 1.25fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.habit-box-stage,
+.habit-box-ledger-panel {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-2);
+  display: grid;
+  gap: 12px;
+}
+
+.habit-box-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.habit-box-square {
+  appearance: none;
+  min-height: 132px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.72)),
+    radial-gradient(circle at top, rgba(224, 106, 63, 0.12), transparent 60%);
+  color: var(--text-h);
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.habit-box-square:hover {
+  transform: translateY(-1px);
+}
+
+.habit-box-square--active {
+  border-color: var(--accent-border);
+  background:
+    linear-gradient(180deg, rgba(255, 244, 238, 0.96), rgba(255, 232, 220, 0.88)),
+    radial-gradient(circle at top, rgba(224, 106, 63, 0.22), transparent 65%);
+  color: var(--accent);
+}
+
+.habit-box-square-icon {
+  font-size: clamp(1.4rem, 4vw, 2.15rem);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.habit-box-square small {
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+
+.habit-box-stage-copy {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.habit-box-ledger-list {
+  display: grid;
+  gap: 12px;
+}
+
+.habit-box-ledger-row {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.habit-square-remove {
+  justify-self: start;
+}
+
 @media (max-width: 900px) {
   .habit-fields,
   .report-fields,
@@ -1428,7 +1574,10 @@ select.auth-input option {
   .report-columns,
   .daily-focus-layout,
   .daily-week-nav,
-  .daily-focus-grid {
+  .daily-focus-grid,
+  .habit-box-layout,
+  .habit-box-card-fields,
+  .habit-box-ledger-row {
     grid-template-columns: 1fr;
   }
 
@@ -1443,7 +1592,9 @@ select.auth-input option {
   }
 
   .daily-focus-head,
-  .daily-ledger-head {
+  .daily-ledger-head,
+  .habit-box-card-head,
+  .habit-boxes-toolbar {
     flex-direction: column;
   }
 
@@ -1456,7 +1607,8 @@ select.auth-input option {
   }
 
   .habit-card-chip-row,
-  .daily-focus-meta {
+  .daily-focus-meta,
+  .habit-box-card-meta {
     justify-content: flex-start;
   }
 

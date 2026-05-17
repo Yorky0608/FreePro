@@ -5,16 +5,17 @@
 
 Usage:
   python scripts/init_db.py
-  DATABASE_URL=sqlite:///./freedom-program.sqlite3 python scripts/init_db.py
+    DATABASE_URL=sqlite:///./data/freedom-program.sqlite3 python scripts/init_db.py
 
 On Windows PowerShell:
-  $env:DATABASE_URL = "sqlite:///./freedom-program.sqlite3"; python scripts/init_db.py
+    $env:DATABASE_URL = "sqlite:///./data/freedom-program.sqlite3"; python scripts/init_db.py
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from sqlalchemy import (
     BigInteger,
@@ -51,11 +52,13 @@ class DbParts:
 
 # Single variable holding DB access configuration.
 # For now, default to a local SQLite file.
+DB_PORT = os.getenv("DB_PORT")
+
 DB: DbParts = DbParts(
-    url=os.getenv("DATABASE_URL", "sqlite:///./freedom-program.sqlite3"),
+    url=os.getenv("DATABASE_URL", "sqlite:///./data/freedom-program.sqlite3"),
     driver=os.getenv("DB_DRIVER"),
     host=os.getenv("DB_HOST"),
-    port=int(os.getenv("DB_PORT")) if os.getenv("DB_PORT") else None,
+    port=int(DB_PORT) if DB_PORT else None,
     database=os.getenv("DB_NAME"),
     username=os.getenv("DB_USER"),
     password=os.getenv("DB_PASSWORD"),
@@ -68,6 +71,7 @@ users = Table(
     "users",
     metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("name", String(120), nullable=True),
     Column("email", String(320), nullable=False, unique=True),
     Column("password_hash", String(255), nullable=False),
     Column("created_at_ms", BigInteger, nullable=False),
@@ -83,8 +87,43 @@ savings = Table(
     Column("updated_at_ms", BigInteger, nullable=False),
 )
 
+user_profile = Table(
+    "user_profile",
+    metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("goal_dollars", Integer, nullable=False, default=0),
+    Column("created_at_ms", BigInteger, nullable=False),
+    Column("updated_at_ms", BigInteger, nullable=False),
+)
+
+ledger_entries = Table(
+    "ledger_entries",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False),
+    Column("client_id", String(255), nullable=True),
+    Column("day_ms", BigInteger, nullable=False),
+    Column("income_dollars", Integer, nullable=False, default=0),
+    Column("expenses_dollars", Integer, nullable=False, default=0),
+    Column("savings_dollars", Integer, nullable=False, default=0),
+    Column("created_at_ms", BigInteger, nullable=False),
+    Column("updated_at_ms", BigInteger, nullable=False),
+)
+
+app_state = Table(
+    "app_state",
+    metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("state_key", String(255), primary_key=True),
+    Column("json_value", String, nullable=False),
+    Column("updated_at_ms", BigInteger, nullable=False),
+)
+
 
 def main() -> None:
+    if DB.url.startswith("sqlite:///"):
+        sqlite_path = Path(DB.url.removeprefix("sqlite:///"))
+        sqlite_path.parent.mkdir(parents=True, exist_ok=True)
     engine = create_engine(DB.url, future=True)
     metadata.create_all(engine)
     print(f"Initialized schema on: {DB.url}")
