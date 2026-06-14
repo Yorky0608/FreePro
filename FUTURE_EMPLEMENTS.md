@@ -15,3 +15,9 @@
 ~~Add a page or more of setting style of an option to change one's name, email, contact info, start date and end date for saving goal - a easy section to list one's strengths and weaknesses (This will be used for instructors to see a quick preview - not currently worried about an instructor view yet - need to finish the user view first)~~
 
 ~~Add all of the AWS API Gateways and update the lambda~~
+
+Create a system that logs certain emails as instructor - with the ability to create a super instructor who can add students to different instructors and send out notifications to all
+
+Create an instructor view that allows them to see the status of their student and how they are progressing - see goal progress, financial, monthly, weekly, daily reports
+
+They should be able to see their profile info

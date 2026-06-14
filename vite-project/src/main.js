@@ -1,3 +1,4 @@
+import { Capacitor, CapacitorHttp } from '@capacitor/core'
 import './style.css'
 import heroLogoUrl from './assets/frepro.png'
 
@@ -12,12 +13,13 @@ if (!app) {
 
 const desktop = null
 const isDesktopApp = false
+const isNativeApp = typeof Capacitor?.isNativePlatform === 'function' && Capacitor.isNativePlatform()
 
 const DEFAULT_API_BASE_URL = 'https://1wos40ydh1.execute-api.us-east-2.amazonaws.com'
 const API_BASE_URL = (import.meta?.env?.VITE_API_BASE_URL || '').trim() || (import.meta.env.DEV ? '/api' : DEFAULT_API_BASE_URL)
 const WEB_SESSION_KEY = 'freedom-program:web-session:v1'
 
-/** @type {null | { id: number, name?: string, email: string, token?: string, cloudUserId?: string }} */
+/** @type {null | { id: number, name?: string, email: string, token?: string, cloudUserId?: string, role?: string, assignedInstructorEmail?: string }} */
 
 let session = null
 let authMode = 'login'
@@ -38,6 +40,15 @@ let journalEntries = []
 let dailyReportWeekMs = startOfLocalWeekMs(new Date())
 let dailyReportDayIndex = getCurrentWeekdayIndex(new Date())
 let isHabitLedgerEditorOpen = false
+let accountNotifications = []
+let instructorStudentEmails = []
+let selectedInstructorStudentEmail = ''
+let selectedInstructorRosterEmail = ''
+let instructorDashboardState = {
+	role: 'student',
+	instructors: [],
+	students: [],
+}
 
 const WEEKLY_REPORT_STORAGE_PREFIX = 'freedom-program:weekly-reports:v1:'
 const JOURNAL_STORAGE_PREFIX = 'freedom-program:journals:v1:'
@@ -64,6 +75,51 @@ function truncateText(value, maxLength = 90) {
 	const safe = String(value || '').trim().replace(/\s+/g, ' ')
 	if (!safe) return ''
 	return safe.length > maxLength ? `${safe.slice(0, maxLength - 1)}...` : safe
+}
+
+function normalizeAccountRole(value) {
+	return value === 'instructor' || value === 'super-instructor' ? value : 'student'
+}
+
+function normalizeAccountEmail(value) {
+	return String(value || '').trim().toLowerCase()
+}
+
+function normalizeNotificationItems(items) {
+	if (!Array.isArray(items)) return []
+	return items
+		.map((item) => ({
+			id: String(item?.id || '').trim(),
+			message: String(item?.message || '').trim(),
+			senderEmail: normalizeAccountEmail(item?.senderEmail),
+			createdAtMs: Number(item?.createdAtMs) || 0,
+		}))
+		.filter((item) => item.id && item.message)
+		.sort((a, b) => b.createdAtMs - a.createdAtMs)
+		.slice(0, 25)
+}
+
+function isInstructorSession(currentSession = session) {
+	const role = normalizeAccountRole(currentSession?.role)
+	return role === 'instructor' || role === 'super-instructor'
+}
+
+function isSuperInstructorSession(currentSession = session) {
+	return normalizeAccountRole(currentSession?.role) === 'super-instructor'
+}
+
+function applyAccountSnapshot(snapshot) {
+	accountNotifications = normalizeNotificationItems(snapshot?.notifications)
+	instructorStudentEmails = Array.isArray(snapshot?.studentEmails)
+		? [...new Set(snapshot.studentEmails.map((email) => normalizeAccountEmail(email)).filter(Boolean))]
+		: []
+	if (!session) return
+	session = {
+		...session,
+		role: normalizeAccountRole(snapshot?.role),
+		assignedInstructorEmail: normalizeAccountEmail(snapshot?.assignedInstructorEmail) || undefined,
+	}
+	saveWebSessionToStorage(session)
 }
 
 function toMonthInputValue(value) {
@@ -197,12 +253,91 @@ function getRendererAppStateSnapshot() {
 	}
 }
 
-async function persistDesktopRendererState() {
-	if (!isDesktopApp || !session || !desktop?.appState?.setRendererState) return
+async function cloudGetRendererState({ token }) {
+	return apiJson({ method: 'GET', apiPath: '/profile/renderer-state', token })
+}
+
+async function cloudSetRendererState({ token, value }) {
+	return apiJson({ method: 'POST', apiPath: '/profile/renderer-state', token, body: { value } })
+}
+
+let rendererStatePersistTimer = null
+let rendererStatePersistInFlight = false
+
+function applyRendererAppStateSnapshot(snapshot) {
+	if (!snapshot || typeof snapshot !== 'object') return false
+
+	const nextProfileSettings = sanitizeProfileSettings({
+		...(snapshot.profileSettings || {}),
+		goalStartDate: profileSettings.goalStartDate,
+		goalEndDate: profileSettings.goalEndDate,
+	})
+	const nextHabitBoardState = sanitizeHabitBoardState(snapshot.habitBoardState)
+	const nextWeeklyReports = (Array.isArray(snapshot.weeklyReports) ? snapshot.weeklyReports : [])
+		.map(sanitizeWeeklyReportEntry)
+		.sort((a, b) => b.week.localeCompare(a.week))
+	const nextJournalEntries = (Array.isArray(snapshot.journalEntries) ? snapshot.journalEntries : [])
+		.map(sanitizeJournalEntry)
+		.sort((a, b) => b.month.localeCompare(a.month))
+	const nextLedgerEntryMetaByClientId = Object.fromEntries(
+		Object.entries(snapshot.ledgerEntryMetaByClientId || {}).map(([clientId, entryMeta]) => [clientId, sanitizeLedgerEntryMeta(entryMeta)])
+	)
+	const nextSavingsLogEntries = (Array.isArray(snapshot.savingsLogEntries) ? snapshot.savingsLogEntries : [])
+		.map((entry) => ({ month: Number(entry?.month), dollars: Math.max(0, Math.round(Number(entry?.dollars) || 0)) }))
+		.filter((entry) => Number.isFinite(entry.month) && entry.month > 0)
+		.sort((a, b) => a.month - b.month)
+
+	profileSettings = nextProfileSettings
+	habitBoardState = nextHabitBoardState
+	weeklyReports = nextWeeklyReports
+	journalEntries = nextJournalEntries
+	ledgerEntryMetaByClientId = nextLedgerEntryMetaByClientId
+	savingsLogEntries = nextSavingsLogEntries
+
+	saveScopedJson(PROFILE_SETTINGS_STORAGE_PREFIX, profileSettings)
+	saveScopedJson(HABIT_BOARD_STORAGE_PREFIX, habitBoardState)
+	saveScopedJson(WEEKLY_REPORT_STORAGE_PREFIX, weeklyReports)
+	saveScopedJson(JOURNAL_STORAGE_PREFIX, journalEntries)
+	saveScopedJson(LEDGER_META_STORAGE_PREFIX, ledgerEntryMetaByClientId)
+	saveScopedJson(SAVINGS_LOG_STORAGE_PREFIX, savingsLogEntries)
+	return true
+}
+
+async function flushRendererStatePersistence() {
+	if (!session || rendererStatePersistInFlight) return
+	rendererStatePersistInFlight = true
 	try {
-		await desktop.appState.setRendererState(getRendererAppStateSnapshot())
+		if (isDesktopApp) {
+			if (!desktop?.appState?.setRendererState) return
+			await desktop.appState.setRendererState(getRendererAppStateSnapshot())
+			return
+		}
+		if (!session?.token) return
+		await cloudSetRendererState({ token: session.token, value: getRendererAppStateSnapshot() })
 	} catch {
-		// ignore desktop persistence failures for now
+		// ignore persistence failures for now
+	} finally {
+		rendererStatePersistInFlight = false
+	}
+}
+
+function persistDesktopRendererState() {
+	if (!session) return
+	if (rendererStatePersistTimer) clearTimeout(rendererStatePersistTimer)
+	const delayMs = isDesktopApp ? 0 : 600
+	rendererStatePersistTimer = setTimeout(() => {
+		rendererStatePersistTimer = null
+		void flushRendererStatePersistence()
+	}, delayMs)
+}
+
+async function hydrateRendererStateFromCloud() {
+	if (!session?.token || isDesktopApp) return false
+	try {
+		const out = await cloudGetRendererState({ token: session.token })
+		return applyRendererAppStateSnapshot(out?.value)
+	} catch {
+		return false
 	}
 }
 
@@ -540,14 +675,18 @@ app.innerHTML = `
 			<div class="topbar-inner">
 				<div class="topbar-brand">The Freedom Program</div>
 				<nav class="topbar-nav" aria-label="Primary">
-					<a class="topbar-link" href="#dashboard">Dashboard</a>
-					<a class="topbar-link" href="#details">Financial</a>
-					<a class="topbar-link" href="#journal">Journal</a>
-					<a class="topbar-link" href="#weekly">Weekly Report</a>
-					<a class="topbar-link" href="#habits">Habits</a>
+					<a class="topbar-link" id="dashboardNavLink" href="#dashboard">Dashboard</a>
+					<a class="topbar-link" id="detailsNavLink" href="#details">Financial</a>
+					<a class="topbar-link" id="journalNavLink" href="#journal">Journal</a>
+					<a class="topbar-link" id="weeklyNavLink" href="#weekly">Weekly Report</a>
+					<a class="topbar-link" id="habitsNavLink" href="#habits">Habits</a>
 					<a class="topbar-link" id="habitBoxesNavLink" href="#habit-boxes" hidden>Habit Boxes</a>
-					<a class="topbar-link" href="#settings">Settings</a>
+					<a class="topbar-link" id="instructorNavLink" href="#instructor" hidden>Instructor</a>
+					<a class="topbar-link" id="studentDetailNavLink" href="#instructor-student" hidden>Student Detail</a>
+					<a class="topbar-link" id="superAdminNavLink" href="#super-admin" hidden>Super Admin</a>
+					<a class="topbar-link" id="settingsNavLink" href="#settings">Settings</a>
 				</nav>
+				<button class="auth-btn auth-btn--secondary topbar-logout" id="topbarLogoutBtn" type="button" hidden>Log out</button>
 			</div>
 		</header>
 
@@ -560,6 +699,7 @@ app.innerHTML = `
 						<div class="mark-core"></div>
 					</div>
 				</div>
+				<div id="notificationInboxWrap"></div>
 			</div>
 		</section>
 
@@ -568,7 +708,6 @@ app.innerHTML = `
 			<div class="auth" id="authWrap" aria-label="Account">
 				<div class="auth-row">
 					<div class="auth-status" id="authStatus">Not logged in</div>
-					<button class="auth-btn" id="logoutBtn" type="button" hidden>Log out</button>
 				</div>
 				<div class="auth-mode" id="authModeSwitch" aria-label="Account mode">
 					<button class="auth-mode-btn auth-mode-btn--active" id="authModeLoginBtn" type="button">Log in</button>
@@ -725,6 +864,21 @@ app.innerHTML = `
 		<section class="panel" id="habit-boxes" aria-label="Habit Boxes" hidden>
 			<h2>Habit Boxes</h2>
 			<div id="habitBoxesWrap"></div>
+		</section>
+
+		<section class="panel" id="instructor" aria-label="Instructor" hidden>
+			<h2>Instructor</h2>
+			<div id="instructorWrap"></div>
+		</section>
+
+		<section class="panel" id="instructor-student" aria-label="Instructor Student Detail" hidden>
+			<h2>Student Detail</h2>
+			<div id="instructorStudentWrap"></div>
+		</section>
+
+		<section class="panel" id="super-admin" aria-label="Super Admin" hidden>
+			<h2>Super Admin</h2>
+			<div id="superAdminWrap"></div>
 		</section>
 
 		<section class="panel" id="settings" aria-label="Settings" hidden>
@@ -911,8 +1065,22 @@ const entryError = /** @type {HTMLDivElement} */ (document.querySelector('#entry
 const habitBoardWrap = /** @type {HTMLDivElement} */ (document.querySelector('#habitBoardWrap'))
 const habitBoxesWrap = /** @type {HTMLDivElement} */ (document.querySelector('#habitBoxesWrap'))
 const habitBoxesNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#habitBoxesNavLink'))
+const instructorNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#instructorNavLink'))
+const studentDetailNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#studentDetailNavLink'))
+const superAdminNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#superAdminNavLink'))
+const topbarLogoutBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#topbarLogoutBtn'))
+const dashboardNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#dashboardNavLink'))
+const detailsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#detailsNavLink'))
+const journalNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#journalNavLink'))
+const weeklyNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#weeklyNavLink'))
+const habitsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#habitsNavLink'))
+const settingsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#settingsNavLink'))
 const weeklyReportWrap = /** @type {HTMLDivElement} */ (document.querySelector('#weeklyReportWrap'))
 const settingsWrap = /** @type {HTMLDivElement} */ (document.querySelector('#settingsWrap'))
+const instructorWrap = /** @type {HTMLDivElement} */ (document.querySelector('#instructorWrap'))
+const instructorStudentWrap = /** @type {HTMLDivElement} */ (document.querySelector('#instructorStudentWrap'))
+const superAdminWrap = /** @type {HTMLDivElement} */ (document.querySelector('#superAdminWrap'))
+const notificationInboxWrap = /** @type {HTMLDivElement} */ (document.querySelector('#notificationInboxWrap'))
 
 const authWrap = /** @type {HTMLDivElement} */ (document.querySelector('#authWrap'))
 const authStatus = /** @type {HTMLDivElement} */ (document.querySelector('#authStatus'))
@@ -931,7 +1099,6 @@ const authEmail = /** @type {HTMLInputElement} */ (document.querySelector('#auth
 const authPassword = /** @type {HTMLInputElement} */ (document.querySelector('#authPassword'))
 const loginBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#loginBtn'))
 const registerBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#registerBtn'))
-const logoutBtn = /** @type {HTMLButtonElement} */ (document.querySelector('#logoutBtn'))
 const authError = /** @type {HTMLDivElement} */ (document.querySelector('#authError'))
 
 const dashboardGate = /** @type {HTMLDivElement} */ (document.querySelector('#dashboardGate'))
@@ -1286,6 +1453,9 @@ async function loadUserScopedAppState() {
 		journalEntries = []
 		ledgerEntryMetaByClientId = {}
 		savingsLogEntries = []
+		accountNotifications = []
+		instructorStudentEmails = []
+		instructorDashboardState = { role: 'student', instructors: [], students: [] }
 		return
 	}
 	const loadedSettings = loadScopedJson(PROFILE_SETTINGS_STORAGE_PREFIX, createDefaultProfileSettings())
@@ -1817,19 +1987,26 @@ const journalSection = /** @type {HTMLElement} */ (document.querySelector('#jour
 const weeklySection = /** @type {HTMLElement} */ (document.querySelector('#weekly'))
 const habitsSection = /** @type {HTMLElement} */ (document.querySelector('#habits'))
 const habitBoxesSection = /** @type {HTMLElement} */ (document.querySelector('#habit-boxes'))
+const instructorSection = /** @type {HTMLElement} */ (document.querySelector('#instructor'))
+const instructorStudentSection = /** @type {HTMLElement} */ (document.querySelector('#instructor-student'))
+const superAdminSection = /** @type {HTMLElement} */ (document.querySelector('#super-admin'))
 const settingsSection = /** @type {HTMLElement} */ (document.querySelector('#settings'))
 
 function normalizeRoute(hash) {
 	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
-	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'habit-boxes', 'settings'])
+	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'habit-boxes', 'instructor', 'instructor-student', 'super-admin', 'settings'])
 	return allowed.has(raw) ? raw : 'dashboard'
 }
 
 function renderRoute() {
 	const route = normalizeRoute(location.hash)
-	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'habit-boxes' || route === 'settings'
+	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'habit-boxes' || route === 'instructor' || route === 'instructor-student' || route === 'super-admin' || route === 'settings'
 	const authed = Boolean(session)
-	const target = needsAuth && !authed ? 'dashboard' : route
+	let target = needsAuth && !authed ? 'dashboard' : route
+	if (target === 'instructor' && !isInstructorSession()) target = 'dashboard'
+	if (target === 'instructor-student' && !isInstructorSession()) target = 'dashboard'
+	if (target === 'super-admin' && !isSuperInstructorSession()) target = 'instructor'
+	if (authed && isSuperInstructorSession() && target !== 'home' && target !== 'instructor' && target !== 'instructor-student' && target !== 'super-admin') target = 'instructor'
 
 	if (homeSection) homeSection.hidden = target !== 'home'
 	if (dashboardSection) dashboardSection.hidden = target !== 'dashboard'
@@ -1838,6 +2015,9 @@ function renderRoute() {
 	if (weeklySection) weeklySection.hidden = target !== 'weekly'
 	if (habitsSection) habitsSection.hidden = target !== 'habits'
 	if (habitBoxesSection) habitBoxesSection.hidden = target !== 'habit-boxes'
+	if (instructorSection) instructorSection.hidden = target !== 'instructor'
+	if (instructorStudentSection) instructorStudentSection.hidden = target !== 'instructor-student'
+	if (superAdminSection) superAdminSection.hidden = target !== 'super-admin'
 	if (settingsSection) settingsSection.hidden = target !== 'settings'
 
 	// Ensure charts render when navigating to details.
@@ -1845,6 +2025,9 @@ function renderRoute() {
 	if (target === 'weekly') renderWeeklyReport()
 	if (target === 'habits') renderHabitBoard()
 	if (target === 'habit-boxes') renderHabitBoxesPage()
+	if (target === 'instructor') renderInstructorPanel()
+	if (target === 'instructor-student') renderInstructorStudentPanel()
+	if (target === 'super-admin') renderSuperAdminPanel()
 	if (target === 'settings') renderSettingsPanel()
 
 	// Avoid weird scroll positions when switching pages.
@@ -1893,8 +2076,18 @@ function loadWebSessionFromStorage() {
 		const email = typeof data?.email === 'string' ? data.email : ''
 		const token = typeof data?.token === 'string' ? data.token : ''
 		const cloudUserId = typeof data?.cloudUserId === 'string' ? data.cloudUserId : ''
+		const role = normalizeAccountRole(data?.role)
+		const assignedInstructorEmail = normalizeAccountEmail(data?.assignedInstructorEmail)
 		if (!email || !token) return null
-		return { id: 0, name: name || undefined, email, token, cloudUserId: cloudUserId || undefined }
+		return {
+			id: 0,
+			name: name || undefined,
+			email,
+			token,
+			cloudUserId: cloudUserId || undefined,
+			role,
+			assignedInstructorEmail: assignedInstructorEmail || undefined,
+		}
 	} catch {
 		return null
 	}
@@ -1913,6 +2106,8 @@ function saveWebSessionToStorage(nextSession) {
 				email: nextSession.email,
 				token: nextSession.token,
 				cloudUserId: nextSession.cloudUserId,
+				role: normalizeAccountRole(nextSession.role),
+				assignedInstructorEmail: normalizeAccountEmail(nextSession.assignedInstructorEmail),
 			})
 		)
 	} catch {
@@ -1945,19 +2140,34 @@ async function apiJson({ method, apiPath, token, body, query, contentType }) {
 	if (token) headers.authorization = `Bearer ${token}`
 
 	let res
+	let nativeText = ''
 	try {
-		res = await fetch(url, {
-			method,
-			headers,
-			body: body ? JSON.stringify(body) : undefined,
-		})
+		if (isNativeApp) {
+			const nativeRes = await CapacitorHttp.request({
+				url: url.toString(),
+				method,
+				headers,
+				data: body ? JSON.stringify(body) : undefined,
+			})
+			nativeText = typeof nativeRes.data === 'string' ? nativeRes.data : JSON.stringify(nativeRes.data ?? '')
+			res = {
+				ok: nativeRes.status >= 200 && nativeRes.status < 300,
+				status: nativeRes.status,
+				text: async () => nativeText,
+			}
+		} else {
+			res = await fetch(url, {
+				method,
+				headers,
+				body: body ? JSON.stringify(body) : undefined,
+			})
+		}
 	} catch (err) {
 		// In browsers this is commonly thrown for CORS failures (preflight blocked),
 		// DNS issues, offline mode, or the server refusing the connection.
-		const hint =
-			`Network error calling ${url.origin}${url.pathname}. ` +
-			`If you're running in a browser (Vite/GitHub Pages), this is often a CORS issue. ` +
-			`Your API must allow Origin: ${location.origin} and handle OPTIONS preflight.`
+		const hint = isNativeApp
+			? `Network error calling ${url.origin}${url.pathname}. Check device connectivity, HTTPS certificate validity, and whether the API is reachable from Android.`
+			: `Network error calling ${url.origin}${url.pathname}. If you're running in a browser (Vite/GitHub Pages), this is often a CORS issue. Your API must allow Origin: ${location.origin} and handle OPTIONS preflight.`
 		const e = new Error(hint)
 		e.cause = err
 		throw e
@@ -2031,12 +2241,44 @@ async function cloudGetProfileName({ token }) {
 	return apiJson({ method: 'GET', apiPath: '/profile/name', token })
 }
 
+async function cloudGetProfileSettings({ token }) {
+	return apiJson({ method: 'GET', apiPath: '/profile/settings', token })
+}
+
 async function cloudSetGoal({ token, goalDollars }) {
 	return apiJson({ method: 'POST', apiPath: '/profile/goal', token, body: { goalDollars } })
 }
 
 async function cloudSetProfileName({ token, name }) {
 	return apiJson({ method: 'POST', apiPath: '/profile/name', token, body: { name } })
+}
+
+async function cloudSetProfileSettings({ token, goalStartDate, goalEndDate }) {
+	return apiJson({ method: 'POST', apiPath: '/profile/settings', token, body: { goalStartDate, goalEndDate } })
+}
+
+async function cloudGetProfileAccount({ token }) {
+	return apiJson({ method: 'GET', apiPath: '/profile/account', token })
+}
+
+async function cloudGetInstructorDashboard({ token, instructorEmail }) {
+	return apiJson({ method: 'GET', apiPath: '/instructor/dashboard', token, query: instructorEmail ? { instructorEmail } : undefined })
+}
+
+async function cloudAssignStudents({ token, instructorEmail, studentEmails }) {
+	return apiJson({ method: 'POST', apiPath: '/instructor/assign-students', token, body: { instructorEmail, studentEmails } })
+}
+
+async function cloudCreateInstructorAccount({ token, email, name, password }) {
+	return apiJson({ method: 'POST', apiPath: '/instructor/create-account', token, body: { email, name, password } })
+}
+
+async function cloudSetInstructorRole({ token, email, role }) {
+	return apiJson({ method: 'POST', apiPath: '/instructor/set-role', token, body: { email, role } })
+}
+
+async function cloudSendInstructorNotification({ token, message, scope, instructorEmail }) {
+	return apiJson({ method: 'POST', apiPath: '/instructor/notifications', token, body: { message, scope, instructorEmail } })
 }
 
 function formatDollarsFromUnits(units) {
@@ -2145,6 +2387,7 @@ function resetGoalUi({ persistLocal }) {
 }
 
 let didWarnWebSync = false
+let didWarnDesktopGoalSync = false
 function warnWebSyncIfNeeded(err) {
 	if (isDesktopApp) return
 	if (didWarnWebSync) return
@@ -2156,14 +2399,26 @@ function warnWebSyncIfNeeded(err) {
 }
 
 function updateAuthUi() {
-	if (!authStatus || !logoutBtn || !authForm) return
+	if (!authStatus || !authForm) return
+	const isSuperInstructor = isSuperInstructorSession()
 	if (habitBoxesNavLink) habitBoxesNavLink.hidden = true
+	if (instructorNavLink) instructorNavLink.hidden = !isInstructorSession()
+	if (studentDetailNavLink) studentDetailNavLink.hidden = !isInstructorSession() || !selectedInstructorStudentEmail
+	if (superAdminNavLink) superAdminNavLink.hidden = !isSuperInstructor
+	if (topbarLogoutBtn) topbarLogoutBtn.hidden = !session
+	if (dashboardNavLink) dashboardNavLink.hidden = isSuperInstructor
+	if (detailsNavLink) detailsNavLink.hidden = isSuperInstructor
+	if (journalNavLink) journalNavLink.hidden = isSuperInstructor
+	if (weeklyNavLink) weeklyNavLink.hidden = isSuperInstructor
+	if (habitsNavLink) habitsNavLink.hidden = isSuperInstructor
+	if (settingsNavLink) settingsNavLink.hidden = isSuperInstructor
 
 	if (session) {
 		const cloudStatus = isDesktopApp ? (session?.token ? ' (cloud sync ON)' : ' (cloud sync OFF)') : ''
 		const identity = session.name || session.email
-		authStatus.textContent = `Logged in as ${identity}${cloudStatus}`
-		logoutBtn.hidden = false
+		const roleLabel = normalizeAccountRole(session.role)
+		const roleText = roleLabel === 'student' ? '' : ` · ${roleLabel}`
+		authStatus.textContent = `Logged in as ${identity}${roleText}${cloudStatus}`
 		if (authModeSwitch) authModeSwitch.hidden = true
 		if (authHint) {
 			authHint.hidden = true
@@ -2182,7 +2437,6 @@ function updateAuthUi() {
 		showAuthError('')
 	} else {
 		authStatus.textContent = 'Not logged in'
-		logoutBtn.hidden = true
 		if (authModeSwitch) authModeSwitch.hidden = false
 		if (authHint) authHint.hidden = false
 		if (profileSummary) profileSummary.hidden = true
@@ -2192,6 +2446,7 @@ function updateAuthUi() {
 		showAuthError('')
 		setAuthMode(authMode)
 	}
+	renderAccountNotifications()
 	setDashboardAuthGate(Boolean(session))
 	renderRoute()
 }
@@ -2241,6 +2496,108 @@ async function hydrateProfileNameFromCloud() {
 		}
 	} catch {
 		// ignore
+	}
+}
+
+async function hydrateAccountFromCloud() {
+	if (!session?.token || isDesktopApp) return false
+	try {
+		const out = await cloudGetProfileAccount({ token: session.token })
+		applyAccountSnapshot(out)
+		return true
+	} catch {
+		return false
+	}
+}
+
+async function hydrateProfileSettingsFromCloud() {
+	if (!session?.token || isDesktopApp) return
+
+	try {
+		const out = await cloudGetProfileSettings({ token: session.token })
+		const nextSettings = sanitizeProfileSettings({
+			...profileSettings,
+			goalStartDate: out?.goalStartDate || profileSettings.goalStartDate,
+			goalEndDate: out?.goalEndDate || profileSettings.goalEndDate,
+		})
+		saveProfileSettingsToStorage(nextSettings)
+	} catch {
+		// keep local settings when cloud settings are unavailable
+	}
+}
+
+let profileSettingsCloudRefreshInFlight = false
+async function refreshProfileSettingsFromCloud({ rerenderIfVisible = false } = {}) {
+	if (!session?.token || isDesktopApp) return false
+	if (profileSettingsCloudRefreshInFlight) return false
+	profileSettingsCloudRefreshInFlight = true
+
+	try {
+		const before = sanitizeProfileSettings(profileSettings)
+		await hydrateProfileSettingsFromCloud()
+		const after = sanitizeProfileSettings(profileSettings)
+		const changed = before.goalStartDate !== after.goalStartDate || before.goalEndDate !== after.goalEndDate
+		if (!changed) return false
+		updateProgress()
+		if (normalizeRoute(location.hash) === 'details') drawDetails()
+		if (rerenderIfVisible && normalizeRoute(location.hash) === 'settings') renderSettingsPanel({ skipCloudRefresh: true })
+		return true
+	} finally {
+		profileSettingsCloudRefreshInFlight = false
+	}
+}
+
+async function persistProfileGoalTimeline(nextSettings) {
+	if (!session?.token) throw new Error('Cloud sync is unavailable (no AWS token)')
+	const out = await cloudSetProfileSettings({
+		token: session.token,
+		goalStartDate: nextSettings.goalStartDate,
+		goalEndDate: nextSettings.goalEndDate,
+	})
+	const mergedSettings = sanitizeProfileSettings({
+		...profileSettings,
+		goalStartDate: out?.goalStartDate || nextSettings.goalStartDate,
+		goalEndDate: out?.goalEndDate || nextSettings.goalEndDate,
+	})
+	saveProfileSettingsToStorage(mergedSettings)
+	return mergedSettings
+}
+
+function renderAccountNotifications() {
+	if (!notificationInboxWrap) return
+	if (!session || !accountNotifications.length) {
+		notificationInboxWrap.innerHTML = ''
+		return
+	}
+	notificationInboxWrap.innerHTML = `<div class="instructor-panel instructor-panel--compact"><div class="instructor-panel-head"><div><div class="habit-kicker">Notifications</div><h3 class="instructor-panel-title">Updates from your instructor</h3></div><span class="habit-card-chip">${accountNotifications.length}</span></div><div class="instructor-notification-list">${accountNotifications.map((item) => `<article class="instructor-note"><div class="instructor-note-head"><strong>${escapeHtml(item.senderEmail || 'Instructor')}</strong><span>${escapeHtml(formatDateLabel(item.createdAtMs || Date.now()))}</span></div><p>${escapeHtml(item.message)}</p></article>`).join('')}</div></div>`
+}
+
+let instructorDashboardRefreshInFlight = false
+async function refreshInstructorDashboard({ rerenderIfVisible = false } = {}) {
+	if (!session?.token || !isInstructorSession() || instructorDashboardRefreshInFlight) return false
+	instructorDashboardRefreshInFlight = true
+	try {
+		const out = await cloudGetInstructorDashboard({
+			token: session.token,
+			instructorEmail: isSuperInstructorSession() ? selectedInstructorRosterEmail : '',
+		})
+		instructorDashboardState = {
+			role: normalizeAccountRole(out?.role || session.role),
+			instructors: Array.isArray(out?.instructors) ? out.instructors : [],
+			students: Array.isArray(out?.students) ? out.students : [],
+		}
+		selectedInstructorRosterEmail = normalizeAccountEmail(out?.instructor?.email) || selectedInstructorRosterEmail
+		if (rerenderIfVisible) {
+			const currentRoute = normalizeRoute(location.hash)
+			if (currentRoute === 'instructor') renderInstructorPanel({ skipRefresh: true })
+			if (currentRoute === 'instructor-student') renderInstructorStudentPanel({ skipRefresh: true })
+			if (currentRoute === 'super-admin') renderSuperAdminPanel({ skipRefresh: true })
+		}
+		return true
+	} catch {
+		return false
+	} finally {
+		instructorDashboardRefreshInFlight = false
 	}
 }
 
@@ -2305,12 +2662,16 @@ async function refreshSessionAndLoad() {
 
 	// Web mode: if logged in, pull goal from cloud + ledger from localStorage.
 	if (session?.token) {
+		await hydrateAccountFromCloud()
 		await hydrateProfileNameFromCloud()
+		await hydrateProfileSettingsFromCloud()
+		await hydrateRendererStateFromCloud()
 		resetGoalUi({ persistLocal: false })
 		await loadGoalFromCloudOrFallback()
 		await loadLedgerEntriesFromStorage()
 		void syncLedgerWithCloud()
 	}
+	updateAuthUi()
 	updateProgress()
 	renderRoute()
 }
@@ -2906,12 +3267,13 @@ function syncHabitBoxesLivePreview(nextState = sanitizeHabitBoardState(habitBoar
 }
 }
 
-function renderSettingsPanel() {
+function renderSettingsPanel(options = {}) {
 	if (!settingsWrap) return
 	if (!session) {
 		settingsWrap.innerHTML = '<div class="habit-gate">Log in to manage your settings.</div>'
 		return
 	}
+	const { skipCloudRefresh = false } = options
 	const safeSettings = sanitizeProfileSettings(profileSettings)
 	settingsWrap.innerHTML = `
 		<form class="settings-form" id="settingsForm">
@@ -2948,7 +3310,7 @@ function renderSettingsPanel() {
 			<div class="auth-actions">
 				<button class="auth-btn" type="submit">Save settings</button>
 			</div>
-			<div class="auth-hint">Your login account remains separate from these local profile details until matching AWS endpoints are added.</div>
+			<div class="auth-hint">Goal start and end dates sync through AWS. Other profile details still stay local to this device.</div>
 			<div class="auth-error" id="settingsMessage" hidden></div>
 		</form>
 	`
@@ -2983,8 +3345,20 @@ function renderSettingsPanel() {
 		}
 		const nextSettings = sanitizeProfileSettings(rawSettings)
 		saveProfileSettingsToStorage(nextSettings)
-		if (settingsMessage) {
-			settingsMessage.textContent = 'Settings saved locally.'
+		let didSyncTimeline = false
+		if (session?.token) {
+			try {
+				await persistProfileGoalTimeline(nextSettings)
+				didSyncTimeline = true
+			} catch (err) {
+				if (settingsMessage) {
+					settingsMessage.textContent = `Settings saved locally. Goal timeline did not sync to AWS: ${String(err?.message || 'Unknown error')}`
+					settingsMessage.hidden = false
+				}
+			}
+		}
+		if (settingsMessage && (didSyncTimeline || !session?.token)) {
+			settingsMessage.textContent = didSyncTimeline ? 'Settings saved. Goal timeline synced to AWS.' : 'Settings saved locally.'
 			settingsMessage.hidden = false
 		}
 		if (nextSettings.name && nextSettings.name !== (session?.name || '')) {
@@ -2998,6 +3372,229 @@ function renderSettingsPanel() {
 		updateProgress()
 		drawDetails()
 	})
+	if (!skipCloudRefresh && session?.token && !isDesktopApp) {
+		void refreshProfileSettingsFromCloud({ rerenderIfVisible: true })
+	}
+}
+
+function renderInstructorPanel(options = {}) {
+	if (!instructorWrap) return
+	if (!session) {
+		instructorWrap.innerHTML = '<div class="habit-gate">Log in to open the instructor view.</div>'
+		return
+	}
+	if (!isInstructorSession()) {
+		instructorWrap.innerHTML = '<div class="habit-gate">Instructor access is only available for instructor accounts.</div>'
+		return
+	}
+
+	const { skipRefresh = false } = options
+	const role = normalizeAccountRole(session.role)
+	const students = Array.isArray(instructorDashboardState.students) ? instructorDashboardState.students : []
+	const instructors = Array.isArray(instructorDashboardState.instructors) ? instructorDashboardState.instructors : []
+	const totalGoal = students.reduce((sum, student) => sum + Math.max(0, Number(student?.goal?.goalDollars) || 0), 0)
+	const totalSaved = students.reduce((sum, student) => sum + Math.max(0, Number(student?.goal?.currentSavingsDollars) || 0), 0)
+	if (!students.some((student) => normalizeAccountEmail(student?.email) === selectedInstructorStudentEmail)) {
+		selectedInstructorStudentEmail = normalizeAccountEmail(students[0]?.email)
+	}
+	const selectedStudent = students.find((student) => normalizeAccountEmail(student?.email) === selectedInstructorStudentEmail) || null
+
+	instructorWrap.innerHTML = `<div class="instructor-shell">
+		<div class="instructor-panel">
+			<div class="instructor-panel-head">
+				<div>
+					<div class="habit-kicker">${escapeHtml(role === 'super-instructor' ? 'Super Instructor' : 'Instructor')}</div>
+					<h3 class="instructor-panel-title">Student progress view</h3>
+					<p class="habit-copy">Track goal progress, finances, journals, weekly reports, habit checks, and profile notes for each student on your roster.</p>
+				</div>
+				<div class="habit-card-chip-row">
+					<span class="habit-card-chip">${students.length} student${students.length === 1 ? '' : 's'}</span>
+					<span class="habit-card-chip">${formatDollars(totalSaved)} saved</span>
+				</div>
+			</div>
+			<div class="summary-grid summary-grid--compact">
+				<div class="metric"><div class="metric-label">Roster Goal</div><div class="metric-value metric-value--small">${formatDollars(totalGoal)}</div></div>
+				<div class="metric"><div class="metric-label">Roster Saved</div><div class="metric-value metric-value--small">${formatDollars(totalSaved)}</div></div>
+				<div class="metric"><div class="metric-label">Notifications</div><div class="metric-value metric-value--small">${accountNotifications.length}</div></div>
+			</div>
+			${role === 'super-instructor' && instructors.length ? `<label class="auth-label"><span>Viewing instructor roster</span><select id="superInstructorRosterSelect" class="auth-input">${instructors.map((instructor) => `<option value="${escapeHtml(instructor.email)}" ${normalizeAccountEmail(instructor.email) === selectedInstructorRosterEmail ? 'selected' : ''}>${escapeHtml(instructor.name || instructor.email)} (${escapeHtml(instructor.email)})</option>`).join('')}</select></label>` : ''}
+		</div>
+		<div class="instructor-panel instructor-panel--compact">
+			<div class="instructor-panel-head">
+				<div>
+					<div class="habit-kicker">Roster</div>
+					<h3 class="instructor-panel-title">Assigned students</h3>
+					<p class="habit-copy">Use the roster cards to open a student detail page with profile, finance, reports, and notifications.</p>
+				</div>
+				${selectedStudent ? `<a class="auth-btn auth-btn--secondary" href="#instructor-student">Open selected student</a>` : ''}
+			</div>
+		</div>
+
+		<div class="instructor-student-grid">${students.length ? students.map((student) => {
+			const goalDollars = Math.max(0, Number(student?.goal?.goalDollars) || 0)
+			const currentSavingsDollars = Math.max(0, Number(student?.goal?.currentSavingsDollars) || 0)
+			const completionPct = goalDollars > 0 ? Math.round((currentSavingsDollars / goalDollars) * 100) : 0
+			const studentEmail = normalizeAccountEmail(student?.email)
+			const isActive = studentEmail === selectedInstructorStudentEmail
+			return `<article class="instructor-student-card ${isActive ? 'instructor-student-card--active' : ''}"><div class="instructor-student-head"><div><h3>${escapeHtml(student?.name || student?.email || 'Student')}</h3><div class="metric-note">${escapeHtml(student?.email || '')}</div><div class="metric-note">Instructor: ${escapeHtml(student?.assignedInstructorEmail || 'Unassigned')}</div></div><div class="habit-card-chip-row"><span class="habit-card-chip">${completionPct}% of goal</span><span class="habit-card-chip">${formatDollars(currentSavingsDollars)}</span></div></div><div class="summary-grid summary-grid--compact"><div class="metric"><div class="metric-label">Goal</div><div class="metric-value metric-value--small">${formatDollars(goalDollars)}</div></div><div class="metric"><div class="metric-label">Weekly Reports</div><div class="metric-value metric-value--small">${escapeHtml(String(student?.reports?.weeklyReportCount || 0))}</div></div><div class="metric"><div class="metric-label">Monthly Journals</div><div class="metric-value metric-value--small">${escapeHtml(String(student?.reports?.monthlyJournalCount || 0))}</div></div><div class="metric"><div class="metric-label">Habit Checks</div><div class="metric-value metric-value--small">${escapeHtml(String(student?.habitBoard?.completedChecks || 0))}</div></div></div><div class="instructor-student-details"><div class="breakdown-panel"><h4 class="breakdown-title">Profile Snapshot</h4><ul class="instructor-mini-list"><li>Timeline: ${escapeHtml(student?.profile?.goalStartDate || '--')} to ${escapeHtml(student?.profile?.goalEndDate || '--')}</li><li>Contact: ${escapeHtml(truncateText(student?.profile?.contactInfo || 'No contact info', 90) || 'No contact info')}</li><li>Strengths: ${escapeHtml(truncateText(student?.profile?.strengths || 'Not listed', 90) || 'Not listed')}</li><li>Weaknesses: ${escapeHtml(truncateText(student?.profile?.weaknesses || 'Not listed', 90) || 'Not listed')}</li></ul></div><div class="breakdown-panel"><h4 class="breakdown-title">Recent Activity</h4><ul class="instructor-mini-list"><li>Latest weekly entry: ${escapeHtml(student?.reports?.latestWeeklyReportWeek || '--')}</li><li>Latest journal month: ${escapeHtml(student?.reports?.latestJournalMonth || '--')}</li><li>Notifications: ${escapeHtml(String(Array.isArray(student?.notifications) ? student.notifications.length : 0))}</li></ul><div class="auth-actions"><button type="button" class="auth-btn auth-btn--secondary" data-instructor-student-email="${escapeHtml(studentEmail)}">${isActive ? 'Selected' : 'Select student'}</button><a class="auth-btn auth-btn--secondary" href="#instructor-student" data-instructor-student-email="${escapeHtml(studentEmail)}">View details</a></div></div></div></article>`
+		}).join('') : '<div class="habit-gate">No students are assigned yet.</div>'}</div>
+	</div>`
+
+	instructorWrap.querySelectorAll('[data-instructor-student-email]').forEach((node) => {
+		node.addEventListener('click', () => {
+			selectedInstructorStudentEmail = normalizeAccountEmail(node.getAttribute('data-instructor-student-email'))
+			renderInstructorPanel({ skipRefresh: true })
+		})
+	})
+
+	const rosterSelect = /** @type {HTMLSelectElement | null} */ (document.getElementById('superInstructorRosterSelect'))
+	rosterSelect?.addEventListener('change', async () => {
+		selectedInstructorRosterEmail = normalizeAccountEmail(rosterSelect.value)
+		await refreshInstructorDashboard({ rerenderIfVisible: false })
+		renderInstructorPanel({ skipRefresh: true })
+	})
+
+	if (!skipRefresh && session?.token && !isDesktopApp) {
+		void refreshInstructorDashboard({ rerenderIfVisible: true })
+	}
+}
+
+function renderInstructorStudentPanel(options = {}) {
+	if (!instructorStudentWrap) return
+	if (!session || !isInstructorSession()) {
+		instructorStudentWrap.innerHTML = '<div class="habit-gate">Open this page from an instructor account.</div>'
+		return
+	}
+	const { skipRefresh = false } = options
+	const students = Array.isArray(instructorDashboardState.students) ? instructorDashboardState.students : []
+	if (!students.some((student) => normalizeAccountEmail(student?.email) === selectedInstructorStudentEmail)) {
+		selectedInstructorStudentEmail = normalizeAccountEmail(students[0]?.email)
+	}
+	const selectedStudent = students.find((student) => normalizeAccountEmail(student?.email) === selectedInstructorStudentEmail) || null
+	if (!selectedStudent) {
+		instructorStudentWrap.innerHTML = '<div class="habit-gate">Select a student from the Instructor page first.</div>'
+		if (!skipRefresh && session?.token && !isDesktopApp) void refreshInstructorDashboard({ rerenderIfVisible: true })
+		return
+	}
+	const selectedGoalDollars = Math.max(0, Number(selectedStudent?.goal?.goalDollars) || 0)
+	const selectedSavingsDollars = Math.max(0, Number(selectedStudent?.goal?.currentSavingsDollars) || 0)
+	const selectedCompletionPct = selectedGoalDollars > 0 ? Math.round((selectedSavingsDollars / selectedGoalDollars) * 100) : 0
+	const selectedNotifications = Array.isArray(selectedStudent?.notifications) ? selectedStudent.notifications : []
+	instructorStudentWrap.innerHTML = `<div class="instructor-shell"><div class="instructor-panel"><div class="instructor-panel-head"><div><div class="habit-kicker">Student Detail</div><h3 class="instructor-panel-title">${escapeHtml(selectedStudent?.name || selectedStudent?.email || 'Student')}</h3><p class="habit-copy">Review profile, progress, report recency, habits, and recent notifications for the currently selected student.</p></div><div class="habit-card-chip-row"><span class="habit-card-chip">${selectedCompletionPct}% of goal</span><span class="habit-card-chip">${formatDollars(selectedSavingsDollars)} saved</span></div></div><div class="instructor-student-picker">${students.map((student) => { const studentEmail = normalizeAccountEmail(student?.email); const isActive = studentEmail === selectedInstructorStudentEmail; return `<button type="button" class="star-toggle star-toggle--compact ${isActive ? 'star-toggle--active' : ''}" data-instructor-student-email="${escapeHtml(studentEmail)}">${escapeHtml(student?.name || student?.email || 'Student')}</button>` }).join('')}</div><div class="instructor-detail-grid"><div class="breakdown-panel"><h4 class="breakdown-title">Profile</h4><ul class="instructor-mini-list"><li>Email: ${escapeHtml(selectedStudent?.email || '--')}</li><li>Assigned instructor: ${escapeHtml(selectedStudent?.assignedInstructorEmail || 'Unassigned')}</li><li>Goal timeline: ${escapeHtml(selectedStudent?.profile?.goalStartDate || '--')} to ${escapeHtml(selectedStudent?.profile?.goalEndDate || '--')}</li><li>Contact: ${formatHabitText(selectedStudent?.profile?.contactInfo || 'No contact info yet.')}</li></ul></div><div class="breakdown-panel"><h4 class="breakdown-title">Strengths</h4><div class="metric-note">${formatHabitText(selectedStudent?.profile?.strengths || 'No strengths listed yet.')}</div></div><div class="breakdown-panel"><h4 class="breakdown-title">Weaknesses</h4><div class="metric-note">${formatHabitText(selectedStudent?.profile?.weaknesses || 'No weaknesses listed yet.')}</div></div><div class="breakdown-panel"><h4 class="breakdown-title">Financial Snapshot</h4><ul class="instructor-mini-list"><li>Goal amount: ${formatDollars(selectedGoalDollars)}</li><li>Current savings: ${formatDollars(selectedSavingsDollars)}</li><li>Weekly savings: ${formatDollars(selectedStudent?.financial?.weekly?.savingsDollars || 0)}</li><li>Monthly savings: ${formatDollars(selectedStudent?.financial?.monthly?.savingsDollars || 0)}</li><li>Yearly savings: ${formatDollars(selectedStudent?.financial?.yearly?.savingsDollars || 0)}</li><li>Weekly margin: ${formatSignedDollars(selectedStudent?.financial?.weekly?.marginDollars || 0)}</li></ul></div><div class="breakdown-panel"><h4 class="breakdown-title">Activity</h4><ul class="instructor-mini-list"><li>Weekly reports: ${escapeHtml(String(selectedStudent?.reports?.weeklyReportCount || 0))}</li><li>Monthly journals: ${escapeHtml(String(selectedStudent?.reports?.monthlyJournalCount || 0))}</li><li>Latest weekly entry: ${escapeHtml(selectedStudent?.reports?.latestWeeklyReportWeek || '--')}</li><li>Latest journal month: ${escapeHtml(selectedStudent?.reports?.latestJournalMonth || '--')}</li><li>Habit checks done: ${escapeHtml(String(selectedStudent?.habitBoard?.completedChecks || 0))}</li><li>Weeks tracked: ${escapeHtml(String(selectedStudent?.habitBoard?.weeksTracked || 0))}</li></ul></div><div class="breakdown-panel report-block--full"><div class="report-block-head"><h4 class="breakdown-title">Recent Notifications</h4><span class="metric-note">${escapeHtml(String(selectedNotifications.length))} saved</span></div>${selectedNotifications.length ? `<div class="instructor-notification-list">${selectedNotifications.slice(0, 5).map((item) => `<div class="instructor-note"><div class="instructor-note-head"><strong>${escapeHtml(item?.senderEmail || 'Instructor')}</strong><span>${Number(item?.createdAtMs) > 0 ? escapeHtml(new Date(Number(item.createdAtMs)).toLocaleString()) : ''}</span></div><p>${formatHabitText(item?.message || '')}</p></div>`).join('')}</div>` : '<div class="metric-note">No notifications have been sent to this student yet.</div>'}</div></div></div></div>`
+	instructorStudentWrap.querySelectorAll('[data-instructor-student-email]').forEach((node) => {
+		node.addEventListener('click', () => {
+			selectedInstructorStudentEmail = normalizeAccountEmail(node.getAttribute('data-instructor-student-email'))
+			renderInstructorStudentPanel({ skipRefresh: true })
+		})
+	})
+	if (!skipRefresh && session?.token && !isDesktopApp) {
+		void refreshInstructorDashboard({ rerenderIfVisible: true })
+	}
+}
+
+function renderSuperAdminPanel(options = {}) {
+	if (!superAdminWrap) return
+	if (!session || !isSuperInstructorSession()) {
+		superAdminWrap.innerHTML = '<div class="habit-gate">Super admin tools are only available for the super-instructor account.</div>'
+		return
+	}
+	const { skipRefresh = false } = options
+	const instructors = Array.isArray(instructorDashboardState.instructors) ? instructorDashboardState.instructors : []
+	superAdminWrap.innerHTML = `<div class="instructor-shell"><div class="instructor-action-grid"><form class="instructor-panel instructor-form" id="instructorAssignForm"><div class="instructor-panel-head"><div><div class="habit-kicker">Assignments</div><h3 class="instructor-panel-title">Assign students to an instructor</h3></div></div><label class="auth-label"><span>Instructor email</span><input id="assignInstructorEmail" class="auth-input" type="email" value="${escapeHtml(selectedInstructorRosterEmail)}" placeholder="coach@example.com" /></label><label class="auth-label auth-label--wide"><span>Student emails</span><textarea id="assignStudentEmails" class="auth-input habit-textarea" rows="4" placeholder="student1@example.com, student2@example.com"></textarea></label><div class="auth-actions"><button type="submit" class="auth-btn">Save roster</button></div><div class="auth-error" id="assignStudentsMessage" hidden></div></form><form class="instructor-panel instructor-form" id="instructorCreateForm"><div class="instructor-panel-head"><div><div class="habit-kicker">Accounts</div><h3 class="instructor-panel-title">Create an instructor account</h3></div></div><label class="auth-label"><span>Instructor name</span><input id="createInstructorName" class="auth-input" type="text" placeholder="Instructor name" /></label><label class="auth-label"><span>Instructor email</span><input id="createInstructorEmail" class="auth-input" type="email" placeholder="instructor@example.com" /></label><label class="auth-label"><span>Temporary password</span><input id="createInstructorPassword" class="auth-input" type="password" placeholder="Create a starter password" /></label><div class="auth-actions"><button type="submit" class="auth-btn">Create instructor</button></div><div class="auth-error" id="createInstructorMessage" hidden></div></form><form class="instructor-panel instructor-form" id="instructorNotificationForm"><div class="instructor-panel-head"><div><div class="habit-kicker">Notifications</div><h3 class="instructor-panel-title">Send an update</h3></div></div>${instructors.length ? `<label class="auth-label"><span>Target roster</span><select id="superAdminNotificationRoster" class="auth-input">${instructors.map((instructor) => `<option value="${escapeHtml(instructor.email)}" ${normalizeAccountEmail(instructor.email) === selectedInstructorRosterEmail ? 'selected' : ''}>${escapeHtml(instructor.name || instructor.email)} (${escapeHtml(instructor.email)})</option>`).join('')}</select></label>` : ''}<label class="auth-label auth-label--wide"><span>Message</span><textarea id="notificationMessage" class="auth-input habit-textarea" rows="4" placeholder="Share reminders, deadlines, or encouragement."></textarea></label><div class="auth-actions"><button type="submit" class="auth-btn">Send notification</button></div><div class="auth-error" id="notificationMessageStatus" hidden></div></form></div></div>`
+	const assignForm = document.getElementById('instructorAssignForm')
+	assignForm?.addEventListener('submit', async (event) => {
+		event.preventDefault()
+		const messageNode = /** @type {HTMLDivElement | null} */ (document.getElementById('assignStudentsMessage'))
+		const instructorEmail = normalizeAccountEmail((/** @type {HTMLInputElement | null} */ (document.getElementById('assignInstructorEmail'))?.value) || '')
+		const studentEmails = String((/** @type {HTMLTextAreaElement | null} */ (document.getElementById('assignStudentEmails'))?.value) || '')
+			.split(/[\s,;]+/)
+			.map((value) => normalizeAccountEmail(value))
+			.filter(Boolean)
+		if (!instructorEmail || !studentEmails.length || !session?.token) {
+			if (messageNode) {
+				messageNode.textContent = 'Enter an instructor email and at least one student email.'
+				messageNode.hidden = false
+			}
+			return
+		}
+		try {
+			await cloudAssignStudents({ token: session.token, instructorEmail, studentEmails })
+			selectedInstructorRosterEmail = instructorEmail
+			await refreshInstructorDashboard({ rerenderIfVisible: false })
+			if (messageNode) {
+				messageNode.textContent = 'Roster updated.'
+				messageNode.hidden = false
+			}
+			renderSuperAdminPanel({ skipRefresh: true })
+		} catch (err) {
+			if (messageNode) {
+				messageNode.textContent = String(err?.message || 'Unable to update the roster.')
+				messageNode.hidden = false
+			}
+		}
+	})
+	const createForm = document.getElementById('instructorCreateForm')
+	createForm?.addEventListener('submit', async (event) => {
+		event.preventDefault()
+		const messageNode = /** @type {HTMLDivElement | null} */ (document.getElementById('createInstructorMessage'))
+		const email = normalizeAccountEmail((/** @type {HTMLInputElement | null} */ (document.getElementById('createInstructorEmail'))?.value) || '')
+		const name = String((/** @type {HTMLInputElement | null} */ (document.getElementById('createInstructorName'))?.value) || '').trim()
+		const password = String((/** @type {HTMLInputElement | null} */ (document.getElementById('createInstructorPassword'))?.value) || '')
+		if (!email || !password || !session?.token) {
+			if (messageNode) {
+				messageNode.textContent = 'Enter an instructor email and temporary password.'
+				messageNode.hidden = false
+			}
+			return
+		}
+		try {
+			await cloudCreateInstructorAccount({ token: session.token, email, name, password })
+			selectedInstructorRosterEmail = email
+			await refreshInstructorDashboard({ rerenderIfVisible: false })
+			if (messageNode) {
+				messageNode.textContent = 'Instructor account created.'
+				messageNode.hidden = false
+			}
+			renderSuperAdminPanel({ skipRefresh: true })
+		} catch (err) {
+			if (messageNode) {
+				messageNode.textContent = String(err?.message || 'Unable to create the instructor account.')
+				messageNode.hidden = false
+			}
+		}
+	})
+	const notificationForm = document.getElementById('instructorNotificationForm')
+	notificationForm?.addEventListener('submit', async (event) => {
+		event.preventDefault()
+		const statusNode = /** @type {HTMLDivElement | null} */ (document.getElementById('notificationMessageStatus'))
+		const message = String((/** @type {HTMLTextAreaElement | null} */ (document.getElementById('notificationMessage'))?.value) || '').trim()
+		const targetRoster = normalizeAccountEmail((/** @type {HTMLSelectElement | null} */ (document.getElementById('superAdminNotificationRoster'))?.value) || selectedInstructorRosterEmail)
+		if (!message || !session?.token) {
+			if (statusNode) {
+				statusNode.textContent = 'Write a message before sending.'
+				statusNode.hidden = false
+			}
+			return
+		}
+		try {
+			await cloudSendInstructorNotification({ token: session.token, message, instructorEmail: targetRoster })
+			if (statusNode) {
+				statusNode.textContent = 'Notification sent.'
+				statusNode.hidden = false
+			}
+			selectedInstructorRosterEmail = targetRoster
+			await hydrateAccountFromCloud()
+			updateAuthUi()
+		} catch (err) {
+			if (statusNode) {
+				statusNode.textContent = String(err?.message || 'Unable to send the notification.')
+				statusNode.hidden = false
+			}
+		}
+	})
+	if (!skipRefresh && session?.token && !isDesktopApp) {
+		void refreshInstructorDashboard({ rerenderIfVisible: true })
+	}
 }
 
 function getPeriodBounds(kind, anchorDayMs) {
@@ -3380,8 +3977,9 @@ authForm?.addEventListener('submit', async (e) => {
 				const token = typeof out?.token === 'string' ? out.token : ''
 				const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
 				const returnedName = typeof out?.name === 'string' ? out.name.trim() : ''
+				const role = normalizeAccountRole(out?.role)
 				if (!token) throw new Error('Registration failed')
-				session = { id: 0, name: returnedName || name || undefined, email, token, cloudUserId: cloudUserId || undefined }
+				session = { id: 0, name: returnedName || name || undefined, email, token, cloudUserId: cloudUserId || undefined, role }
 				saveWebSessionToStorage(session)
 			}
 		} else if (isDesktopApp) {
@@ -3391,8 +3989,10 @@ authForm?.addEventListener('submit', async (e) => {
 			const token = typeof out?.token === 'string' ? out.token : ''
 			const cloudUserId = typeof out?.userId === 'string' ? out.userId : ''
 			const returnedName = typeof out?.name === 'string' ? out.name.trim() : ''
+			const role = normalizeAccountRole(out?.role)
+			const assignedInstructorEmail = normalizeAccountEmail(out?.assignedInstructorEmail)
 			if (!token) throw new Error('Login failed')
-			session = { id: 0, name: returnedName || undefined, email, token, cloudUserId: cloudUserId || undefined }
+			session = { id: 0, name: returnedName || undefined, email, token, cloudUserId: cloudUserId || undefined, role, assignedInstructorEmail: assignedInstructorEmail || undefined }
 			saveWebSessionToStorage(session)
 		}
 
@@ -3411,11 +4011,16 @@ authForm?.addEventListener('submit', async (e) => {
 			await loadLedgerEntriesFromStorage()
 			void syncLedgerWithCloud()
 		} else {
+			await hydrateAccountFromCloud()
+			await hydrateRendererStateFromCloud()
 			await loadGoalFromCloudOrFallback()
+			await hydrateProfileSettingsFromCloud()
 			await loadLedgerEntriesFromStorage()
 			void syncLedgerWithCloud()
 		}
+		updateAuthUi()
 		updateProgress()
+		renderRoute()
 	} catch (err) {
 		showAuthError(err?.message ? String(err.message) : (authMode === 'register' ? 'Registration failed' : 'Login failed'))
 	} finally {
@@ -3431,10 +4036,10 @@ registerBtn?.addEventListener('click', async () => {
 authModeLoginBtn?.addEventListener('click', () => setAuthMode('login'))
 authModeRegisterBtn?.addEventListener('click', () => setAuthMode('register'))
 
-logoutBtn?.addEventListener('click', async () => {
+async function performLogout() {
 	showAuthError('')
 	try {
-		logoutBtn.disabled = true
+		if (topbarLogoutBtn) topbarLogoutBtn.disabled = true
 		if (isDesktopApp) {
 			await desktop.auth.logout()
 			session = null
@@ -3458,9 +4063,11 @@ logoutBtn?.addEventListener('click', async () => {
 	} catch {
 		// ignore
 	} finally {
-		logoutBtn.disabled = false
+		if (topbarLogoutBtn) topbarLogoutBtn.disabled = false
 	}
-})
+}
+
+topbarLogoutBtn?.addEventListener('click', performLogout)
 
 setAuthMode('login')
 

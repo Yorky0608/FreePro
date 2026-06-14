@@ -37,6 +37,35 @@ npm --prefix vite-project run dev
 
 Then open the URL shown in the terminal (usually `http://localhost:5173/`).
 
+## Run as a mobile app
+
+The app now ships with a Capacitor wrapper, so the same Vite codebase can be built as a native Android app.
+
+Install dependencies first:
+
+```bash
+cd vite-project
+npm install
+```
+
+Build and sync the web bundle into the native projects:
+
+```bash
+npm run mobile:build
+```
+
+Open the Android project in Android Studio:
+
+```bash
+npm run mobile:android
+```
+
+Notes:
+
+- The native Android project lives in `android/`.
+- After frontend changes, rerun `npm run mobile:build` before testing in the emulator/device.
+- On Windows, Android is the supported native target in this workspace. iOS would need to be added from a macOS machine later.
+
 ### Web login + sync (optional)
 
 The browser build now supports the same email/password login UI. In web mode, it authenticates directly against the cloud API (and, when logged in, will sync savings + goal to the API).
@@ -61,6 +90,8 @@ Required Lambda env vars:
 - `SAVINGS_TABLE` — DynamoDB table name for savings/month log
 - `LEDGER_TABLE` — DynamoDB table name for ledger entries
 - `JWT_SECRET` — secret used to sign/verify JWTs (keep this stable, or existing tokens become invalid)
+- `INSTRUCTOR_EMAILS` — optional comma-separated emails that should default to instructor role
+- `SUPER_INSTRUCTOR_EMAILS` — optional comma-separated emails that should default to super-instructor role
 
 If you want account names to sync through AWS as well, update your auth Lambda and `USERS_TABLE` items so:
 
@@ -126,6 +157,25 @@ Quick verification (should return `401` for bad creds, not `500`):
 ```bash
 node -e "fetch('https://YOUR_API_ID.execute-api.YOUR_REGION.amazonaws.com/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:'debug@example.com',password:'notreal'})}).then(async r=>{console.log('status',r.status); console.log('body', (await r.text()).slice(0,200));}).catch(e=>{console.error(e); process.exit(1);});"
 ```
+
+## Active AWS Routes
+
+The current frontend expects these authenticated API routes in addition to auth, savings sync, and ledger sync:
+
+- `GET /profile/settings`
+- `POST /profile/settings`
+- `GET /profile/account`
+- `GET /instructor/dashboard`
+- `POST /instructor/create-account`
+- `POST /instructor/set-role`
+- `POST /instructor/assign-students`
+- `POST /instructor/notifications`
+
+Notes:
+
+- the instructor routes are handled by the same Lambda and existing DynamoDB tables
+- these are additional API Gateway routes, not separate AWS services
+- `GET /instructor/dashboard` supports a super-instructor selecting an instructor roster with `?instructorEmail=`
 
 ## Build
 

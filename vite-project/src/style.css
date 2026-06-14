@@ -53,6 +53,11 @@ body {
   margin: 0;
   min-height: 100svh;
   background: var(--bg);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  overscroll-behavior-y: none;
 }
 
 /* Freedom Program-ish layout */
@@ -248,6 +253,11 @@ body {
   min-width: 0;
 }
 
+.topbar-logout {
+  justify-self: end;
+  align-self: center;
+}
+
 .topbar-link {
   color: var(--text-h);
   text-decoration: none;
@@ -323,6 +333,15 @@ body {
   display: grid;
   justify-items: center;
   gap: 14px;
+}
+
+#notificationInboxWrap {
+  width: min(960px, 100%);
+  margin-top: 1.25rem;
+}
+
+#notificationInboxWrap .instructor-panel {
+  text-align: left;
 }
 
 .summary-grid--compact {
@@ -515,9 +534,141 @@ body {
   gap: 1rem;
 }
 
+.instructor-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.instructor-panel {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  padding: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.instructor-panel--compact {
+  margin-top: 1rem;
+}
+
+.instructor-panel-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.instructor-panel-title {
+  margin: 0;
+  color: var(--text-h);
+  font-family: var(--heading);
+  font-size: 1.1rem;
+}
+
+.instructor-action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.instructor-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.instructor-student-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+
+.instructor-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+}
+
+.instructor-student-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.instructor-student-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-2);
+  padding: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.instructor-student-card--active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.instructor-student-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+
+.instructor-student-head h3 {
+  margin: 0;
+  color: var(--text-h);
+}
+
+.instructor-student-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.instructor-mini-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.instructor-notification-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.instructor-note {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0.85rem 0.95rem;
+  background: var(--surface-2);
+}
+
+.instructor-note-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+  color: var(--text-h);
+  font-size: 0.88rem;
+}
+
+.instructor-note p {
+  margin: 0;
+  color: var(--text);
+}
+
 @media (max-width: 720px) {
   .habit-board-head,
-  .entry-feed-head {
+  .entry-feed-head,
+  .instructor-panel-head,
+  .instructor-student-head {
     flex-direction: column;
     align-items: start;
   }
@@ -1627,6 +1778,10 @@ select.auth-input option {
   .topbar-nav {
     justify-content: center;
     gap: 14px;
+  }
+
+  .topbar-logout {
+    justify-self: center;
   }
 
   .panel {

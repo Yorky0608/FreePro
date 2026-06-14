@@ -12,12 +12,20 @@ These routes are active in the current app and implemented in Lambda:
 - `POST /profile/goal`
 - `GET /profile/name`
 - `POST /profile/name`
+- `GET /profile/settings`
+- `POST /profile/settings`
+- `GET /profile/account`
 - `GET /profile/renderer-state`
 - `POST /profile/renderer-state`
 - `GET /sync/pull`
 - `POST /sync/save`
 - `GET /ledger/pull`
 - `POST /ledger/upsert`
+- `GET /instructor/dashboard`
+- `POST /instructor/create-account`
+- `POST /instructor/set-role`
+- `POST /instructor/assign-students`
+- `POST /instructor/notifications`
 
 ## What Each Route Covers
 
@@ -41,6 +49,14 @@ Covers the savings goal amount.
 - `POST /profile/name`
 
 Covers the display name stored with the authenticated account.
+
+### Profile Settings And Account
+
+- `GET /profile/settings`
+- `POST /profile/settings`
+- `GET /profile/account`
+
+These routes cover the goal timeline dates plus account metadata used by the authenticated session, including role, assigned instructor, assigned student emails, and notification inbox items.
 
 ### Renderer State
 
@@ -90,6 +106,25 @@ Current ledger payload fields supported:
 - `createdAtMs`
 - `updatedAtMs`
 
+### Instructor Routes
+
+- `GET /instructor/dashboard`
+- `POST /instructor/create-account`
+- `POST /instructor/set-role`
+- `POST /instructor/assign-students`
+- `POST /instructor/notifications`
+
+These routes power the instructor and super-instructor experience.
+
+Current responsibilities covered:
+
+- viewing an instructor roster and student summaries
+- viewing a selected instructor roster as a super instructor
+- creating instructor accounts
+- promoting or demoting instructor roles
+- assigning students to instructors
+- sending roster-scoped notifications to students
+
 ## Routes Not Strictly Needed Right Now
 
 These would only be needed if the project later decides to split the renderer-state payload into dedicated AWS resources.
@@ -134,3 +169,4 @@ Optional future endpoints:
 - Renderer-state is doing real work right now, not just a temporary placeholder.
 - If the team wants cleaner DynamoDB modeling later, journal, weekly, habits, and settings can be broken out into dedicated routes without changing the current app behavior first.
 - The richer financial/ledger metadata is now covered by the existing ledger routes, not by a separate metadata endpoint.
+- The newer instructor routes do not add new AWS services; they are additional API Gateway routes handled by the same Lambda and existing DynamoDB tables.
