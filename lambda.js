@@ -1036,6 +1036,8 @@ function buildStudentSummary(user, rendererState, ledgerItems) {
     assignedInstructorEmail: normalizeEmail(user?.assignedInstructorEmail),
     profile: {
       contactInfo: normalizeLedgerText(profileSettings?.contactInfo, 240),
+      goodAt: normalizeLedgerText(profileSettings?.goodAt, 400),
+      enjoys: normalizeLedgerText(profileSettings?.enjoys, 400),
       strengths: normalizeLedgerText(profileSettings?.strengths, 400),
       weaknesses: normalizeLedgerText(profileSettings?.weaknesses, 400),
       goalStartDate: normalizeIsoDate(user?.goalStartDate),

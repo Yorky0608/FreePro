@@ -30,6 +30,8 @@ let profileSettings = {
 	contactInfo: '',
 	goalStartDate: '',
 	goalEndDate: '',
+	goodAt: '',
+	enjoys: '',
 	strengths: '',
 	weaknesses: '',
 }
@@ -371,6 +373,48 @@ function setDailyWeekState(weekKey, weekState) {
 	saveHabitBoardToStorage(nextState)
 }
 
+function createSectionIntroMarkup(title, description, accentLabel = '') {
+	return `<div class="report-section-intro"><div><h4>${escapeHtml(title)}</h4><p>${escapeHtml(description)}</p></div>${accentLabel ? `<div class="report-date-pill report-date-pill--subtle">${escapeHtml(accentLabel)}</div>` : ''}</div>`
+}
+
+function prependSectionIntro(container, title, description, accentLabel = '') {
+	if (!container || container.querySelector('.report-section-intro')) return
+	container.insertAdjacentHTML('afterbegin', createSectionIntroMarkup(title, description, accentLabel))
+}
+
+function enhanceJournalFormLayout(form, latest) {
+	if (!form) return
+	prependSectionIntro(form, 'Monthly snapshot', 'Start with your money picture, then move into work, lessons, and life direction.', formatMonthHeading(latest.month))
+	const blockGroups = Array.from(form.querySelectorAll('.report-columns'))
+	blockGroups.forEach((group) => group.classList.add('report-columns--staggered'))
+	const firstGroup = blockGroups[0]
+	if (firstGroup && !firstGroup.previousElementSibling?.classList.contains('report-section-intro')) {
+		firstGroup.insertAdjacentHTML('beforebegin', createSectionIntroMarkup('Growth and work', 'Keep jobs and lessons in separate blocks so the page reads in smaller chunks.'))
+	}
+}
+
+function enhanceWeeklyReportLayout(form, latest) {
+	if (!form) return
+	prependSectionIntro(form, 'Conversations and reading', 'Capture people, books, and key takeaways first, then finish with lessons and your weekly money snapshot.', `Week of ${formatDateLabel(latest.week)}`)
+	const blockGroups = Array.from(form.querySelectorAll('.report-columns'))
+	blockGroups.forEach((group) => group.classList.add('report-columns--staggered'))
+	const financeBlock = document.getElementById('weeklyStarFinances')?.closest('.report-block')
+	if (financeBlock) {
+		financeBlock.querySelector('.report-fields--financial')?.classList.add('report-fields--weekly-financial')
+		if (!financeBlock.querySelector('.report-section-subgrid')) {
+			const financeFields = financeBlock.querySelector('.report-fields--financial')
+			const marginNode = financeFields?.querySelector('.report-margin')
+			const labels = financeFields ? Array.from(financeFields.querySelectorAll('.auth-label')) : []
+			if (financeFields && labels.length) {
+				const grid = document.createElement('div')
+				grid.className = 'report-section-subgrid report-section-subgrid--three'
+				labels.forEach((label) => grid.appendChild(label))
+				financeFields.insertBefore(grid, marginNode || null)
+			}
+		}
+	}
+}
+
 function renderHabitTracker() {
     const wrap = document.getElementById('habitTrackerWrap')
 	if (!wrap) return
@@ -455,6 +499,7 @@ function renderHabitTracker() {
 	html += '</div>'
 	wrap.innerHTML = html
 	const journalForm = document.getElementById('journalForm')
+	enhanceJournalFormLayout(journalForm, latest)
 	const readJournalFormEntry = () => {
 		const starredSections = {
 			financial: readStarredSection('journalStarFinancial'),
@@ -530,6 +575,7 @@ function renderWeeklyReport() {
 	html += '</div>'
 	wrap.innerHTML = html
 	const weeklyReportForm = document.getElementById('weeklyReportForm')
+	enhanceWeeklyReportLayout(weeklyReportForm, latest)
 	bindStarToggleButtons(weeklyReportForm)
 	const readWeeklyReportFormEntry = () => {
 		const starredSections = {
@@ -634,15 +680,63 @@ function showHabitPopups() {
 function renderStarredHighlights() {
 	if (!starredHighlightsWrap) return
 	if (!session) {
-		starredHighlightsWrap.innerHTML = ''
+		starredHighlightsWrap.innerHTML = '<div class="habit-gate">Log in to view your starred items.</div>'
 		return
 	}
 	const highlights = getStarredHighlights()
+	const counts = highlights.reduce((acc, item) => {
+		acc[item.kind] = (acc[item.kind] || 0) + 1
+		return acc
+	}, /** @type {Record<string, number>} */ ({}))
 	if (!highlights.length) {
-		starredHighlightsWrap.innerHTML = '<div class="starred-panel"><div class="starred-panel-title">Starred Highlights</div><div class="breakdown-empty">Star a day, week, or month entry to pin it here.</div></div>'
+		starredHighlightsWrap.innerHTML = '<div class="starred-panel"><div class="starred-panel-head"><div><div class="starred-panel-title">Starred Highlights</div><p class="metric-note">Save important weekly, monthly, and daily entries here as a review board.</p></div></div><div class="breakdown-empty">Star a day, week, or month entry to pin it here.</div></div>'
 		return
 	}
-	starredHighlightsWrap.innerHTML = `<div class="starred-panel"><div class="starred-panel-title">Starred Highlights</div><div class="starred-list">${highlights.map((item) => `<article class="starred-item"><div class="starred-item-head"><span class="habit-card-chip">${escapeHtml(item.kind)}</span><strong>${escapeHtml(item.label)}</strong></div><div class="starred-item-summary">${formatHabitText(item.summary || 'Starred item')}</div></article>`).join('')}</div></div>`
+	starredHighlightsWrap.innerHTML = `<div class="starred-panel"><div class="starred-panel-head"><div><div class="starred-panel-title">Starred Highlights</div><p class="metric-note">Everything you star now lives here instead of the dashboard.</p></div><div class="habit-card-chip-row">${Object.entries(counts).map(([kind, count]) => `<span class="habit-card-chip">${escapeHtml(kind)}: ${escapeHtml(String(count))}</span>`).join('')}</div></div><div class="starred-list">${highlights.map((item) => `<article class="starred-item"><div class="starred-item-head"><span class="habit-card-chip">${escapeHtml(item.kind)}</span><strong>${escapeHtml(item.label)}</strong></div><div class="starred-item-summary">${formatHabitText(item.summary || 'Starred item')}</div></article>`).join('')}</div></div>`
+}
+
+function enhanceInstructorRosterLayout(students) {
+	if (!instructorWrap) return
+	const rosterCards = Array.from(instructorWrap.querySelectorAll('.instructor-student-card'))
+	rosterCards.forEach((card, index) => {
+		const student = students[index]
+		if (!student) return
+		card.classList.add('instructor-student-card--structured')
+		const detailGrid = card.querySelector('.instructor-student-details')
+		detailGrid?.classList.add('instructor-student-details--structured')
+		const snapshotList = card.querySelector('.instructor-mini-list')
+		if (snapshotList && !snapshotList.querySelector('[data-profile-additions]')) {
+			snapshotList.insertAdjacentHTML('beforeend', `<li data-profile-additions>Good at: ${escapeHtml(truncateText(student?.profile?.goodAt || 'Not listed', 90) || 'Not listed')}</li><li data-profile-additions>Enjoys: ${escapeHtml(truncateText(student?.profile?.enjoys || 'Not listed', 90) || 'Not listed')}</li>`)
+		}
+	})
+}
+
+function enhanceInstructorStudentLayout(selectedStudent) {
+	if (!instructorStudentWrap) return
+	const detailGrid = instructorStudentWrap.querySelector('.instructor-detail-grid')
+	if (!detailGrid || detailGrid.querySelector('.instructor-detail-section')) return
+	const panels = Array.from(detailGrid.querySelectorAll(':scope > .breakdown-panel'))
+	if (!panels.length) return
+	const groups = [
+		{ title: 'Profile and direction', copy: 'Core profile details, interests, and growth areas.', items: panels.slice(0, 3) },
+		{ title: 'Progress and activity', copy: 'Financial status, report recency, and habit follow-through.', items: panels.slice(3, 6) },
+		{ title: 'Notifications', copy: 'Recent instructor communication for this student.', items: panels.slice(6) },
+	]
+	detailGrid.innerHTML = ''
+	groups.filter((group) => group.items.length).forEach((group) => {
+		const section = document.createElement('section')
+		section.className = 'instructor-detail-section'
+		section.innerHTML = `<div class="instructor-detail-section-head"><div><h4 class="breakdown-title">${escapeHtml(group.title)}</h4><p class="metric-note">${escapeHtml(group.copy)}</p></div></div>`
+		const grid = document.createElement('div')
+		grid.className = 'instructor-detail-section-grid'
+		group.items.forEach((item) => grid.appendChild(item))
+		section.appendChild(grid)
+		detailGrid.appendChild(section)
+	})
+	const profileList = detailGrid.querySelector('.instructor-detail-section .instructor-mini-list')
+	if (profileList && !profileList.querySelector('[data-profile-additions]')) {
+		profileList.insertAdjacentHTML('beforeend', `<li data-profile-additions>Good at: ${formatHabitText(selectedStudent?.profile?.goodAt || 'No strengths-in-practice listed yet.')}</li><li data-profile-additions>Enjoys: ${formatHabitText(selectedStudent?.profile?.enjoys || 'No interests listed yet.')}</li>`)
+	}
 }
 
 // Patch updateHabitTracker to also show popups
@@ -684,6 +778,7 @@ app.innerHTML = `
 					<a class="topbar-link" id="instructorNavLink" href="#instructor" hidden>Instructor</a>
 					<a class="topbar-link" id="studentDetailNavLink" href="#instructor-student" hidden>Student Detail</a>
 					<a class="topbar-link" id="superAdminNavLink" href="#super-admin" hidden>Super Admin</a>
+					<a class="topbar-link" id="starredNavLink" href="#starred">Starred</a>
 					<a class="topbar-link" id="settingsNavLink" href="#settings">Settings</a>
 				</nav>
 				<button class="auth-btn auth-btn--secondary topbar-logout" id="topbarLogoutBtn" type="button" hidden>Log out</button>
@@ -842,7 +937,6 @@ app.innerHTML = `
 
 				<!-- Habit popups -->
 				<div id="habitPopupContainer"></div>
-				<div id="starredHighlightsWrap"></div>
 			</div>
 		</section>
 
@@ -854,6 +948,11 @@ app.innerHTML = `
 		<section class="panel" id="weekly" aria-label="Weekly Report" hidden>
 			<h2>Weekly Report</h2>
 			<div id="weeklyReportWrap"></div>
+		</section>
+
+		<section class="panel" id="starred" aria-label="Starred Highlights" hidden>
+			<h2>Starred</h2>
+			<div id="starredHighlightsWrap"></div>
 		</section>
 
 		<section class="panel" id="habits" aria-label="Habit Tracker" hidden>
@@ -950,66 +1049,94 @@ app.innerHTML = `
 			</div>
 
 			<form class="details-entry" id="entryForm" aria-label="Add income, expenses, and savings">
-				<label class="auth-label">
-					<span>Entry date</span>
-					<input id="entryDate" class="auth-input" type="date" aria-label="Entry date" />
-				</label>
-				<label class="auth-label">
-					<span>Income ($)</span>
-					<input id="entryIncome" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Income in dollars" />
-				</label>
-				<label class="auth-label">
-					<span>Income source</span>
-					<input id="entryIncomeSource" class="auth-input" type="text" maxlength="120" placeholder="Paycheck, side job, gift" aria-label="Income source" />
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Income note</span>
-					<input id="entryIncomeNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the income" aria-label="Income note" />
-				</label>
-				<label class="auth-label">
-					<span>Expenses ($)</span>
-					<input id="entryExpenses" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Expenses in dollars" />
-				</label>
-				<label class="auth-label">
-					<span>Expense category</span>
-					<select id="entryExpenseCategory" class="auth-input" aria-label="Expense category">
-						<option value="Housing">Housing</option>
-						<option value="Transportation">Transportation</option>
-						<option value="Food">Food</option>
-						<option value="Utilities">Utilities</option>
-						<option value="Health">Health</option>
-						<option value="Education">Education</option>
-						<option value="Other">Other</option>
-					</select>
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Expense note</span>
-					<input id="entryExpenseNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the expense" aria-label="Expense note" />
-				</label>
-				<label class="auth-label">
-					<span>Savings ($)</span>
-					<input id="entrySavings" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Savings in dollars" />
-				</label>
-				<label class="auth-label">
-					<span>E-Fund ($)</span>
-					<input id="entryFundEmergency" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Emergency fund amount" />
-				</label>
-				<label class="auth-label">
-					<span>Car Fund ($)</span>
-					<input id="entryFundCar" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Car fund amount" />
-				</label>
-				<label class="auth-label">
-					<span>Next Big Fund ($)</span>
-					<input id="entryFundNextBig" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Next big fund amount" />
-				</label>
-				<label class="auth-label">
-					<span>Other fund name</span>
-					<input id="entryFundOtherName" class="auth-input" type="text" maxlength="60" placeholder="Travel, school, tools" aria-label="Other fund name" />
-				</label>
-				<label class="auth-label">
-					<span>Other fund amount ($)</span>
-					<input id="entryFundOtherAmount" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Other fund amount" />
-				</label>
+					<div class="details-entry-head">
+						<div>
+							<h3 class="details-entry-title">Add financial entry</h3>
+							<p class="auth-hint">Work through the form in order: basics, income, expenses, then savings allocation.</p>
+						</div>
+					</div>
+					<div class="details-entry-grid">
+						<section class="entry-section-card entry-section-card--summary" aria-label="Entry basics">
+							<h3 class="entry-section-title">Entry basics</h3>
+							<div class="entry-section-grid entry-section-grid--compact">
+								<label class="auth-label">
+									<span>Entry date</span>
+									<input id="entryDate" class="auth-input" type="date" aria-label="Entry date" />
+								</label>
+								<label class="auth-label">
+									<span>Savings ($)</span>
+									<input id="entrySavings" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Savings in dollars" />
+								</label>
+							</div>
+						</section>
+						<section class="entry-section-card" aria-label="Income details">
+							<h3 class="entry-section-title">Income</h3>
+							<div class="entry-section-grid">
+								<label class="auth-label">
+									<span>Income ($)</span>
+									<input id="entryIncome" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Income in dollars" />
+								</label>
+								<label class="auth-label">
+									<span>Income source</span>
+									<input id="entryIncomeSource" class="auth-input" type="text" maxlength="120" placeholder="Paycheck, side job, gift" aria-label="Income source" />
+								</label>
+								<label class="auth-label auth-label--wide">
+									<span>Income note</span>
+									<input id="entryIncomeNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the income" aria-label="Income note" />
+								</label>
+							</div>
+						</section>
+						<section class="entry-section-card" aria-label="Expense details">
+							<h3 class="entry-section-title">Expenses</h3>
+							<div class="entry-section-grid">
+								<label class="auth-label">
+									<span>Expenses ($)</span>
+									<input id="entryExpenses" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Expenses in dollars" />
+								</label>
+								<label class="auth-label">
+									<span>Expense category</span>
+									<select id="entryExpenseCategory" class="auth-input" aria-label="Expense category">
+										<option value="Housing">Housing</option>
+										<option value="Transportation">Transportation</option>
+										<option value="Food">Food</option>
+										<option value="Utilities">Utilities</option>
+										<option value="Health">Health</option>
+										<option value="Education">Education</option>
+										<option value="Other">Other</option>
+									</select>
+								</label>
+								<label class="auth-label auth-label--wide">
+									<span>Expense note</span>
+									<input id="entryExpenseNote" class="auth-input" type="text" maxlength="240" placeholder="Optional note about the expense" aria-label="Expense note" />
+								</label>
+							</div>
+						</section>
+						<section class="entry-section-card entry-section-card--wide" aria-label="Savings allocation">
+							<h3 class="entry-section-title">Savings allocation</h3>
+							<div class="entry-section-grid entry-section-grid--funds">
+								<label class="auth-label">
+									<span>E-Fund ($)</span>
+									<input id="entryFundEmergency" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Emergency fund amount" />
+								</label>
+								<label class="auth-label">
+									<span>Car Fund ($)</span>
+									<input id="entryFundCar" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Car fund amount" />
+								</label>
+								<label class="auth-label">
+									<span>Next Big Fund ($)</span>
+									<input id="entryFundNextBig" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Next big fund amount" />
+								</label>
+								<label class="auth-label">
+									<span>Other fund name</span>
+									<input id="entryFundOtherName" class="auth-input" type="text" maxlength="60" placeholder="Travel, school, tools" aria-label="Other fund name" />
+								</label>
+								<label class="auth-label">
+									<span>Other fund amount ($)</span>
+									<input id="entryFundOtherAmount" class="auth-input" type="number" inputmode="numeric" min="0" step="1" value="0" aria-label="Other fund amount" />
+								</label>
+							</div>
+						</section>
+					</div>
 				<div class="auth-actions">
 					<button class="auth-btn" id="entryAddBtn" type="submit">Add entry</button>
 				</div>
@@ -1073,6 +1200,7 @@ const dashboardNavLink = /** @type {HTMLAnchorElement} */ (document.querySelecto
 const detailsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#detailsNavLink'))
 const journalNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#journalNavLink'))
 const weeklyNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#weeklyNavLink'))
+const starredNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#starredNavLink'))
 const habitsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#habitsNavLink'))
 const settingsNavLink = /** @type {HTMLAnchorElement} */ (document.querySelector('#settingsNavLink'))
 const weeklyReportWrap = /** @type {HTMLDivElement} */ (document.querySelector('#weeklyReportWrap'))
@@ -1187,6 +1315,8 @@ function createDefaultProfileSettings() {
 		contactInfo: '',
 		goalStartDate: isoDateValue(startMs),
 		goalEndDate: isoDateValue(endMs),
+		goodAt: '',
+		enjoys: '',
 		strengths: '',
 		weaknesses: '',
 	}
@@ -1200,6 +1330,8 @@ function sanitizeProfileSettings(value) {
 		contactInfo: sanitizeLongText(value?.contactInfo || '', 320),
 		goalStartDate: String(value?.goalStartDate || base.goalStartDate).trim() || base.goalStartDate,
 		goalEndDate: String(value?.goalEndDate || base.goalEndDate).trim() || base.goalEndDate,
+		goodAt: sanitizeLongText(value?.goodAt || '', 500),
+		enjoys: sanitizeLongText(value?.enjoys || '', 500),
 		strengths: sanitizeLongText(value?.strengths || '', 500),
 		weaknesses: sanitizeLongText(value?.weaknesses || '', 500),
 	}
@@ -1985,6 +2117,7 @@ const dashboardSection = /** @type {HTMLElement} */ (document.querySelector('#da
 const detailsSection = /** @type {HTMLElement} */ (document.querySelector('#details'))
 const journalSection = /** @type {HTMLElement} */ (document.querySelector('#journal'))
 const weeklySection = /** @type {HTMLElement} */ (document.querySelector('#weekly'))
+const starredSection = /** @type {HTMLElement} */ (document.querySelector('#starred'))
 const habitsSection = /** @type {HTMLElement} */ (document.querySelector('#habits'))
 const habitBoxesSection = /** @type {HTMLElement} */ (document.querySelector('#habit-boxes'))
 const instructorSection = /** @type {HTMLElement} */ (document.querySelector('#instructor'))
@@ -1994,13 +2127,13 @@ const settingsSection = /** @type {HTMLElement} */ (document.querySelector('#set
 
 function normalizeRoute(hash) {
 	const raw = String(hash || '').replace(/^#/, '').trim().toLowerCase()
-	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'habits', 'habit-boxes', 'instructor', 'instructor-student', 'super-admin', 'settings'])
+	const allowed = new Set(['home', 'dashboard', 'details', 'journal', 'weekly', 'starred', 'habits', 'habit-boxes', 'instructor', 'instructor-student', 'super-admin', 'settings'])
 	return allowed.has(raw) ? raw : 'dashboard'
 }
 
 function renderRoute() {
 	const route = normalizeRoute(location.hash)
-	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'habits' || route === 'habit-boxes' || route === 'instructor' || route === 'instructor-student' || route === 'super-admin' || route === 'settings'
+	const needsAuth = route === 'details' || route === 'journal' || route === 'weekly' || route === 'starred' || route === 'habits' || route === 'habit-boxes' || route === 'instructor' || route === 'instructor-student' || route === 'super-admin' || route === 'settings'
 	const authed = Boolean(session)
 	let target = needsAuth && !authed ? 'dashboard' : route
 	if (target === 'instructor' && !isInstructorSession()) target = 'dashboard'
@@ -2013,6 +2146,7 @@ function renderRoute() {
 	if (detailsSection) detailsSection.hidden = target !== 'details'
 	if (journalSection) journalSection.hidden = target !== 'journal'
 	if (weeklySection) weeklySection.hidden = target !== 'weekly'
+	if (starredSection) starredSection.hidden = target !== 'starred'
 	if (habitsSection) habitsSection.hidden = target !== 'habits'
 	if (habitBoxesSection) habitBoxesSection.hidden = target !== 'habit-boxes'
 	if (instructorSection) instructorSection.hidden = target !== 'instructor'
@@ -2023,6 +2157,7 @@ function renderRoute() {
 	// Ensure charts render when navigating to details.
 	if (target === 'details') drawDetails()
 	if (target === 'weekly') renderWeeklyReport()
+	if (target === 'starred') renderStarredHighlights()
 	if (target === 'habits') renderHabitBoard()
 	if (target === 'habit-boxes') renderHabitBoxesPage()
 	if (target === 'instructor') renderInstructorPanel()
@@ -2410,6 +2545,7 @@ function updateAuthUi() {
 	if (detailsNavLink) detailsNavLink.hidden = isSuperInstructor
 	if (journalNavLink) journalNavLink.hidden = isSuperInstructor
 	if (weeklyNavLink) weeklyNavLink.hidden = isSuperInstructor
+	if (starredNavLink) starredNavLink.hidden = isSuperInstructor
 	if (habitsNavLink) habitsNavLink.hidden = isSuperInstructor
 	if (settingsNavLink) settingsNavLink.hidden = isSuperInstructor
 
@@ -3277,35 +3413,61 @@ function renderSettingsPanel(options = {}) {
 	const safeSettings = sanitizeProfileSettings(profileSettings)
 	settingsWrap.innerHTML = `
 		<form class="settings-form" id="settingsForm">
-			<div class="settings-grid">
-				<label class="auth-label">
-					<span>Name</span>
-					<input id="settingsName" class="auth-input" type="text" maxlength="120" value="${escapeHtml(safeSettings.name || session.name || '')}" />
-				</label>
-				<label class="auth-label">
-					<span>Email</span>
-					<input id="settingsEmail" class="auth-input" type="email" maxlength="160" value="${escapeHtml(safeSettings.email || session.email || '')}" />
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Contact info</span>
-					<textarea id="settingsContactInfo" class="auth-input habit-textarea" rows="3">${escapeHtml(safeSettings.contactInfo)}</textarea>
-				</label>
-				<label class="auth-label">
-					<span>Goal start date</span>
-					<input id="settingsGoalStartDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalStartDate)}" />
-				</label>
-				<label class="auth-label">
-					<span>Goal end date</span>
-					<input id="settingsGoalEndDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalEndDate)}" />
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Strengths</span>
-					<textarea id="settingsStrengths" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.strengths)}</textarea>
-				</label>
-				<label class="auth-label auth-label--wide">
-					<span>Weaknesses</span>
-					<textarea id="settingsWeaknesses" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.weaknesses)}</textarea>
-				</label>
+			<div class="settings-section-card">
+				<div class="settings-section-head">
+					<div>
+						<h3 class="settings-section-title">Profile basics</h3>
+						<p class="auth-hint">Keep contact details and goal timing together at the top of the profile.</p>
+					</div>
+				</div>
+				<div class="settings-grid">
+					<label class="auth-label">
+						<span>Name</span>
+						<input id="settingsName" class="auth-input" type="text" maxlength="120" value="${escapeHtml(safeSettings.name || session.name || '')}" />
+					</label>
+					<label class="auth-label">
+						<span>Email</span>
+						<input id="settingsEmail" class="auth-input" type="email" maxlength="160" value="${escapeHtml(safeSettings.email || session.email || '')}" />
+					</label>
+					<label class="auth-label auth-label--wide">
+						<span>Contact info</span>
+						<textarea id="settingsContactInfo" class="auth-input habit-textarea" rows="3">${escapeHtml(safeSettings.contactInfo)}</textarea>
+					</label>
+					<label class="auth-label">
+						<span>Goal start date</span>
+						<input id="settingsGoalStartDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalStartDate)}" />
+					</label>
+					<label class="auth-label">
+						<span>Goal end date</span>
+						<input id="settingsGoalEndDate" class="auth-input" type="date" value="${escapeHtml(safeSettings.goalEndDate)}" />
+					</label>
+				</div>
+			</div>
+			<div class="settings-section-card">
+				<div class="settings-section-head">
+					<div>
+						<h3 class="settings-section-title">Profile snapshot</h3>
+						<p class="auth-hint">Capture what this student does well, enjoys, and where they are still growing.</p>
+					</div>
+				</div>
+				<div class="settings-grid settings-grid--profile">
+					<label class="auth-label auth-label--wide">
+						<span>What I am good at</span>
+						<textarea id="settingsGoodAt" class="auth-input habit-textarea" rows="3">${escapeHtml(safeSettings.goodAt)}</textarea>
+					</label>
+					<label class="auth-label auth-label--wide">
+						<span>What I enjoy</span>
+						<textarea id="settingsEnjoys" class="auth-input habit-textarea" rows="3">${escapeHtml(safeSettings.enjoys)}</textarea>
+					</label>
+					<label class="auth-label auth-label--wide">
+						<span>Strengths</span>
+						<textarea id="settingsStrengths" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.strengths)}</textarea>
+					</label>
+					<label class="auth-label auth-label--wide">
+						<span>Weaknesses</span>
+						<textarea id="settingsWeaknesses" class="auth-input habit-textarea" rows="4">${escapeHtml(safeSettings.weaknesses)}</textarea>
+					</label>
+				</div>
 			</div>
 			<div class="auth-actions">
 				<button class="auth-btn" type="submit">Save settings</button>
@@ -3321,6 +3483,8 @@ function renderSettingsPanel(options = {}) {
 		contactInfo: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsContactInfo'))?.value,
 		goalStartDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalStartDate'))?.value,
 		goalEndDate: /** @type {HTMLInputElement | null} */ (document.getElementById('settingsGoalEndDate'))?.value,
+		goodAt: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsGoodAt'))?.value,
+		enjoys: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsEnjoys'))?.value,
 		strengths: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsStrengths'))?.value,
 		weaknesses: /** @type {HTMLTextAreaElement | null} */ (document.getElementById('settingsWeaknesses'))?.value,
 	})
@@ -3440,6 +3604,16 @@ function renderInstructorPanel(options = {}) {
 		}).join('') : '<div class="habit-gate">No students are assigned yet.</div>'}</div>
 	</div>`
 
+	const rosterCards = Array.from(instructorWrap.querySelectorAll('.instructor-student-card'))
+	rosterCards.forEach((card, index) => {
+		const student = students[index]
+		if (!student) return
+		const snapshotList = card.querySelector('.instructor-mini-list')
+		if (!snapshotList) return
+		snapshotList.insertAdjacentHTML('beforeend', `<li>Good at: ${escapeHtml(truncateText(student?.profile?.goodAt || 'Not listed', 90) || 'Not listed')}</li><li>Enjoys: ${escapeHtml(truncateText(student?.profile?.enjoys || 'Not listed', 90) || 'Not listed')}</li>`)
+	})
+	enhanceInstructorRosterLayout(students)
+
 	instructorWrap.querySelectorAll('[data-instructor-student-email]').forEach((node) => {
 		node.addEventListener('click', () => {
 			selectedInstructorStudentEmail = normalizeAccountEmail(node.getAttribute('data-instructor-student-email'))
@@ -3481,6 +3655,13 @@ function renderInstructorStudentPanel(options = {}) {
 	const selectedCompletionPct = selectedGoalDollars > 0 ? Math.round((selectedSavingsDollars / selectedGoalDollars) * 100) : 0
 	const selectedNotifications = Array.isArray(selectedStudent?.notifications) ? selectedStudent.notifications : []
 	instructorStudentWrap.innerHTML = `<div class="instructor-shell"><div class="instructor-panel"><div class="instructor-panel-head"><div><div class="habit-kicker">Student Detail</div><h3 class="instructor-panel-title">${escapeHtml(selectedStudent?.name || selectedStudent?.email || 'Student')}</h3><p class="habit-copy">Review profile, progress, report recency, habits, and recent notifications for the currently selected student.</p></div><div class="habit-card-chip-row"><span class="habit-card-chip">${selectedCompletionPct}% of goal</span><span class="habit-card-chip">${formatDollars(selectedSavingsDollars)} saved</span></div></div><div class="instructor-student-picker">${students.map((student) => { const studentEmail = normalizeAccountEmail(student?.email); const isActive = studentEmail === selectedInstructorStudentEmail; return `<button type="button" class="star-toggle star-toggle--compact ${isActive ? 'star-toggle--active' : ''}" data-instructor-student-email="${escapeHtml(studentEmail)}">${escapeHtml(student?.name || student?.email || 'Student')}</button>` }).join('')}</div><div class="instructor-detail-grid"><div class="breakdown-panel"><h4 class="breakdown-title">Profile</h4><ul class="instructor-mini-list"><li>Email: ${escapeHtml(selectedStudent?.email || '--')}</li><li>Assigned instructor: ${escapeHtml(selectedStudent?.assignedInstructorEmail || 'Unassigned')}</li><li>Goal timeline: ${escapeHtml(selectedStudent?.profile?.goalStartDate || '--')} to ${escapeHtml(selectedStudent?.profile?.goalEndDate || '--')}</li><li>Contact: ${formatHabitText(selectedStudent?.profile?.contactInfo || 'No contact info yet.')}</li></ul></div><div class="breakdown-panel"><h4 class="breakdown-title">Strengths</h4><div class="metric-note">${formatHabitText(selectedStudent?.profile?.strengths || 'No strengths listed yet.')}</div></div><div class="breakdown-panel"><h4 class="breakdown-title">Weaknesses</h4><div class="metric-note">${formatHabitText(selectedStudent?.profile?.weaknesses || 'No weaknesses listed yet.')}</div></div><div class="breakdown-panel"><h4 class="breakdown-title">Financial Snapshot</h4><ul class="instructor-mini-list"><li>Goal amount: ${formatDollars(selectedGoalDollars)}</li><li>Current savings: ${formatDollars(selectedSavingsDollars)}</li><li>Weekly savings: ${formatDollars(selectedStudent?.financial?.weekly?.savingsDollars || 0)}</li><li>Monthly savings: ${formatDollars(selectedStudent?.financial?.monthly?.savingsDollars || 0)}</li><li>Yearly savings: ${formatDollars(selectedStudent?.financial?.yearly?.savingsDollars || 0)}</li><li>Weekly margin: ${formatSignedDollars(selectedStudent?.financial?.weekly?.marginDollars || 0)}</li></ul></div><div class="breakdown-panel"><h4 class="breakdown-title">Activity</h4><ul class="instructor-mini-list"><li>Weekly reports: ${escapeHtml(String(selectedStudent?.reports?.weeklyReportCount || 0))}</li><li>Monthly journals: ${escapeHtml(String(selectedStudent?.reports?.monthlyJournalCount || 0))}</li><li>Latest weekly entry: ${escapeHtml(selectedStudent?.reports?.latestWeeklyReportWeek || '--')}</li><li>Latest journal month: ${escapeHtml(selectedStudent?.reports?.latestJournalMonth || '--')}</li><li>Habit checks done: ${escapeHtml(String(selectedStudent?.habitBoard?.completedChecks || 0))}</li><li>Weeks tracked: ${escapeHtml(String(selectedStudent?.habitBoard?.weeksTracked || 0))}</li></ul></div><div class="breakdown-panel report-block--full"><div class="report-block-head"><h4 class="breakdown-title">Recent Notifications</h4><span class="metric-note">${escapeHtml(String(selectedNotifications.length))} saved</span></div>${selectedNotifications.length ? `<div class="instructor-notification-list">${selectedNotifications.slice(0, 5).map((item) => `<div class="instructor-note"><div class="instructor-note-head"><strong>${escapeHtml(item?.senderEmail || 'Instructor')}</strong><span>${Number(item?.createdAtMs) > 0 ? escapeHtml(new Date(Number(item.createdAtMs)).toLocaleString()) : ''}</span></div><p>${formatHabitText(item?.message || '')}</p></div>`).join('')}</div>` : '<div class="metric-note">No notifications have been sent to this student yet.</div>'}</div></div></div></div>`
+	const profilePanel = instructorStudentWrap.querySelector('.instructor-detail-grid .breakdown-panel')
+	if (profilePanel) {
+		const profileList = profilePanel.querySelector('.instructor-mini-list')
+		profileList?.insertAdjacentHTML('beforeend', `<li>Good at: ${formatHabitText(selectedStudent?.profile?.goodAt || 'No strengths-in-practice listed yet.')}</li><li>Enjoys: ${formatHabitText(selectedStudent?.profile?.enjoys || 'No interests listed yet.')}</li>`)
+	}
+	enhanceInstructorStudentLayout(selectedStudent)
+
 	instructorStudentWrap.querySelectorAll('[data-instructor-student-email]').forEach((node) => {
 		node.addEventListener('click', () => {
 			selectedInstructorStudentEmail = normalizeAccountEmail(node.getAttribute('data-instructor-student-email'))

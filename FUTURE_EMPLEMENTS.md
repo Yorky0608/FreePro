@@ -16,8 +16,16 @@
 
 ~~Add all of the AWS API Gateways and update the lambda~~
 
-Create a system that logs certain emails as instructor - with the ability to create a super instructor who can add students to different instructors and send out notifications to all
+~~Create a system that logs certain emails as instructor - with the ability to create a super instructor who can add students to different instructors and send out notifications to all~~
 
-Create an instructor view that allows them to see the status of their student and how they are progressing - see goal progress, financial, monthly, weekly, daily reports
+~~Create an instructor view that allows them to see the status of their student and how they are progressing - see goal progress, financial, monthly, weekly, daily reports~~
 
-They should be able to see their profile info
+~~They should be able to see their profile info~~
+
+Add to student profiles what they are good at and what they enjoy
+
+Find a better way to display all the entry fields to the user - currently everything is just thrown at them 
+
+    - Find a way to better organize the finacial tab and the monthly and weekly
+
+Find a better way to display the info to the instructors
